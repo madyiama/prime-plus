@@ -89,7 +89,7 @@ def _tt_sensitivity(model, observed, destination):
     raw = np.asarray(model.Ctt, dtype=float)
     noise = np.asarray(model.trs.tipTilt.Cn_tt, dtype=float)
     original_dphi = np.array(model.dphi_tt, copy=True)
-    alpha_values = [0.0, 0.5, 0.9, 0.98, 1.0]
+    alpha_values = [0.0, 0.75, 0.9, 0.98, 1.0]
     ref_r0 = float(model.ao.atm.r0)
     spectra = []
     records = []
