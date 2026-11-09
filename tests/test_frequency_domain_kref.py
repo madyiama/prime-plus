@@ -82,6 +82,44 @@ class TestKRefFloatMono(unittest.TestCase):
                                msg=f"Mono: target_ps={target_ps_mas:.6f} ≠ psInMas={psInMas}")
 
 
+class TestDefaultSharedFrequencyGrid(unittest.TestCase):
+    """Reference-pupil lag and Fourier PSD lag must describe the same scales."""
+
+    @classmethod
+    def setUpClass(cls):
+        root = _p3_path()
+        cls.fao = _build_model(
+            root + '/tests/scao_test_multi_wvl.ini', root,
+            psdExpansion=False, psdPerWavelength=False,
+        )
+
+    def test_default_multiband_psd_grid_matches_reference_otf_sampling(self):
+        freq = self.fao.freq
+        self.assertGreater(freq.nWvl, 1)
+        self.assertAlmostEqual(
+            float(freq.PSDstep) * float(self.fao.ao.tel.D)
+            * float(freq.sampRef), 1.0, places=12,
+            msg="PSDstep and OTF sampRef imply incompatible pupil separations",
+        )
+        # With expansion off the reference wavelength, not the reddest
+        # spectral bin, defines the shared-grid spatial PSD sampling.
+        self.assertAlmostEqual(
+            float(freq.PSDstep),
+            float(freq.psInMas[0] / (freq.wvlRef * _RAD2MAS
+                                   * freq.kRef_float)),
+            places=12,
+        )
+
+    def test_multiband_reference_camera_pixel_scale_remains_exact(self):
+        freq = self.fao.freq
+        self.assertAlmostEqual(
+            float(freq.wvlRef * freq.PSDstep
+                  * freq.kRef_float * _RAD2MAS),
+            float(freq.psInMas[0]),
+            places=8,
+        )
+
+
 class TestKRefFloatMulti(unittest.TestCase):
     """
     For three science wavelengths [1.2, 1.66, 2.2] µm with psdExpansion=True
