@@ -436,7 +436,7 @@ class psfR:
         self.wfe['PSFR SR OTF'] = self.SR[0]
         self.wfe["PSFR SR PEAK"] = 1e2*FourierUtils.getStrehl(
             _integrate_spectral_psf(self.psf), self.ao.tel.pupil,
-            self.freq.sampRef,
+            self.freq.sampRef, method='max',
         )
 
 
