@@ -351,8 +351,11 @@ def anisokinetism_function(tel, atm, src, gs, nOtf, samp):
     Y = zern.modes[1]/2
     X2 = X**2
     Y2 = Y**2
-    XY = X*Y.T
-    YX = Y*X.T
+    # Off-diagonal covariance is the local 2-D quadratic cross term XY.
+    # Transposing either coordinate changes XY into an incorrect square
+    # on the usual Cartesian Zernike grid.
+    XY = X*Y
+    YX = Y*X
 
     # instantiating the phase structure function
     Dani_l = np.zeros((nSrc, atm.nL, nOtf, nOtf))
