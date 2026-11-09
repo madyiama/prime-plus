@@ -41,3 +41,99 @@ Calibration physique des gains STRAP et du miroir TT 2020, modèle de ciel APD t
 - Beltramo-Martin et al., MNRAS 487 (2019), 5450 : PRIME/Keck, séparation fitting, aliasing et anisoplanétisme, https://academic.oup.com/mnras/article/487/4/5450/5519866
 - Ferreira et al., A&A (2018), DOI 10.1051/0004-6361/201832579 : approximation du fitting `~0.23(d/r0)^(5/3)` sous hypothèses spécifiques.
 - `docs/psfr-physics-traceability.md` : inventaire des sources et niveaux théorie/numérique/instrument.
+
+
+## Complément d'audit V1 : code TT / HO et cohérence des unités (2026-11-09)
+
+**Important : aucune justification théorique pour réintroduire les anciens
+coefficients empiriques STRAP `0.18` et `3.2`.** Le noyau gaussien a
+sa propre dérivation et ses propres tests ; l'éventuel écart à NIRC2 ne
+justifie pas d'ajustement de gain sur une image binaire.
+
+### Autres termes de PSF-R
+
+- Le `r0` du modèle direct est **déjà converti** à la longueur d'onde
+  scientifique : `fourierModel.__init__` affecte `ao.atm.wvl=freq.wvlRef`
+  et le setter `atmosphere.wvl` applique `r0 ∝ lambda^(6/5)`. Ne
+  PAS ajouter de nouveau facteur `(lambda_atm/lambda_sci)^2` au fitting
+  ou à l'aliasing. Les commentaires de `psfR` sont moins explicites
+  que cette mutation et doivent être interprétés dans leur contexte.
+- Fitting : PSD von Kármán intégrée en dehors du cutoff DM; aliasing :
+  PSD repliée dans la bande de correction ; anisoplanétisme :
+  approximation focal-angulaire + anisokinétisme ; pixel :
+  sinc de réponse de pixel. Ils suivent les constructions PRIME. Le
+  caractère exact du filtre DM et les paramètres de couches Keck ne sont
+  pas validés par une seule observation.
+- HO temporel : deux erreurs analytiques constatées dans
+  `systemDiagnosis.temporal_transfer_function` (ancienne intégration
+  `sinc(f/(πfs)) exp(-if/fs)` et délai `exp(-2if τ)` au lieu de
+  `sinc(f/fs) exp(-iπf/fs)` et `exp(-2πifτ)`) ont été corrigées dans
+  cette PR en réutilisant les helpers STRAP testés.
+- Les grilles fréquentielles HO et TT commencent maintenant à
+  `f_min=fs/N` via `np.fft.rfftfreq(...)[1:]` ; auparavant la fréquence
+  initiale subissait une seconde division par `N/fs` (~0.00085 Hz
+  contre ~0.0292 Hz pour STRAP n0013). Les tests analytiques ont été
+  ajoutés ; impact observationnel à mesurer, probablement limité pour
+  la TT, mais l'ancienne convention était mathématiquement incorrecte.
+
+### Chaîne STRAP vérifiée par étapes
+
+1. `DTTCENTROIDS` reproduit numériquement depuis les quatre APD et
+   `APD_IMAT`. `a_OPD = D * theta / 4` [m] si `theta` est une
+   véritable position angulaire [rad]; cela ne valide pas, à lui seul,
+   le gain optique de la quad-cell sur le ciel.
+2. `C_y=Y^T Y/N` avec `Y` centré : covariance des centroïdes mesurés,
+   et NON covariance du mouvement physique de la cible.
+3. Van Dam : spectre Welch haute fréquence `P_y ≈ |S|² P_n` où
+   `P_n=2 C_n / fs`. L'implémentation de la densité unilatérale
+   et de la covariance hors-diagonale est cohérente sous l'hypothèse
+   bruit blanc et faible turbulence dans la bande de fit.
+4. En mode `legacy_psfr`, quand `C_y-(1+pn)C_n` est PSD,
+   `C_legacy=[C_y-(1+pn)C_n] + pn C_n = C_y-C_n`.
+   Ce résultat **n'est pas** le résidu physique exact pour une boucle
+   dont le capteur mesure `S n`.
+5. En mode spectral, `y = W S d + S n`, `e=S d-PKS n` impliquent
+   `P_e=[P_y-|S|²P_n]/|W|² + |PKS|²P_n`. Ce calcul, ses unités,
+   et les tests synthétiques sont corrects ; sa validité instrumentale
+   est conditionnelle à W, K, P et au gain du centroïde.
+6. `C_theta=(4/D)^2 C_e`, `Dphi=(2πD/λ)^2 u^T C_theta u`,
+   `OTF_tt=exp(-Dphi/2)`. Cette transformation est exactement la
+   transformée de Fourier de la convolution par un jitter gaussien.
+   Les tests géométriques préexistants la contrôlent directement.
+
+### Mesures conditionnelles n0013 (modèle `unity`, van Dam)
+
+- `tr(C_y)=3.2277523e-12 m²`,
+  `tr(C_n)=2.9047296e-12 m²`,
+  `g_S=0.97454715`, `g_physical=0.05057986`.
+- Le bruit filtré attribué aux centroïdes vaut 87.7 % de leur trace.
+- `tr(C_legacy)=3.2302275e-13 m²` => jitter RMS moyen par axe
+  `31.58 mas`, FWHM gaussienne équivalente `74.36 mas`.
+- `tr(C_spectral)=5.4955993e-13 m²` => `41.19 mas` par axe,
+  FWHM équivalente `96.99 mas`.
+- Approximation `W=1` : `tr(C_e)≈tr(C_y)-(g_S-g_physical)tr(C_n)
+  =5.43877e-13 m²`, proche de l'intégrale spectrale complète.
+  Cette cohérence **écarte un bug évident de facteur 4/16** dans la
+  propagation géométrique ; elle ne certifie pas le bruit mesuré.
+- À `C_y` fixée, réduire `C_n` **augmente** le jitter spectral
+  reconstruit (sensibilité `g_physical-g_S≈-0.924`) : ne pas
+  supposer qu'une surestimation du bruit explique un jitter trop
+  grand par défaut.
+- L'image `n0013` représente une binaire, donc le `NIRC2 SR`
+  dérivé sans modèle de source n'est pas une vérité de Strehl
+  isolé. Une comparaison qualitative ne valide aucun gain STRAP.
+
+La V1 peut conserver le mode de TT spectral comme conditionnel et
+le mode legacy comme référence reproductible. Ne pas les confondre
+avec des estimations instrumentales certifiées. Suivi : issue #10.
+
+### Tests de cette mise à jour
+
+```bash
+uv run --with pytest python -m pytest -q tests/test_tt_transfer_functions.py \
+  tests/test_tt_closed_loop_formalism.py \
+  tests/test_psfr_spatial_physics_contract.py
+uv run --with pytest python -m pytest -q
+```
+
+Aucun test de ce nouveau commit n'a été exécuté par l'assistant.
