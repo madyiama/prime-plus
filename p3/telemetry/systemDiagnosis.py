@@ -46,6 +46,15 @@ def _tt_latency_response(freq_hz, sample_rate_hz, delay_frames):
     )
 
 
+def _positive_fft_frequency_grid(sample_rate_hz, n_samples):
+    """Positive real-FFT frequencies [Hz], excluding DC; avoid double scaling."""
+    if not np.isfinite(sample_rate_hz) or sample_rate_hz <= 0:
+        raise ValueError("Invalid loop sample rate")
+    if not isinstance(n_samples, (int, np.integer)) or n_samples < 4:
+        raise ValueError("Loop must have at least four samples")
+    return np.fft.rfftfreq(n_samples, d=1.0 / sample_rate_hz)[1:]
+
+
 class systemDiagnosis:
 
     def __init__(self, trs, noiseMethod='autocorrelation', nshift=1, nfit=2,
@@ -115,9 +124,9 @@ class systemDiagnosis:
 #%%
     def temporal_transfer_function(self):
         def delay_transfer_function(freq,fSamp,delay):
-            return np.exp(-2*complex(0,1)*freq*delay/fSamp)
+            return _tt_latency_response(freq, fSamp, delay)
         def wfs_transfer_function(freq,fSamp):
-            return np.sinc(freq/fSamp/np.pi)*np.exp(-1*complex(0,1)*freq/fSamp)
+            return _tt_sensor_integration_response(freq, fSamp)
         def servo_transfer_function(freq,fSamp,num,den):
             z = np.exp(-2*complex(0,1)*np.pi*freq/fSamp)
             ho_num = num[0] + num[1]*z + num[2]*z**2 + num[3]*z**3
@@ -125,7 +134,9 @@ class systemDiagnosis:
             return ho_num/ho_den
 
         #1\ HIGH-ORDER LOOP
-        self.trs.holoop.tf.freq = np.linspace(self.trs.holoop.freq/self.trs.wfs.nExp,self.trs.wfs.nExp/2,num=self.trs.wfs.nExp//2)*self.trs.holoop.freq/self.trs.wfs.nExp
+        self.trs.holoop.tf.freq = _positive_fft_frequency_grid(
+            self.trs.holoop.freq, self.trs.wfs.nExp
+        )
         #1.2 wfs TF
         self.trs.holoop.tf.wfs  = wfs_transfer_function(self.trs.holoop.tf.freq,self.trs.holoop.freq)
         #1.3. Lag tf
@@ -144,7 +155,9 @@ class systemDiagnosis:
 
         # 2\ TT LOOP
         #2.1. Define the frequency vectors
-        self.trs.ttloop.tf.freq = np.linspace(self.trs.ttloop.freq/self.trs.tipTilt.nExp,self.trs.tipTilt.nExp/2,self.trs.tipTilt.nExp//2)*self.trs.ttloop.freq/self.trs.tipTilt.nExp
+        self.trs.ttloop.tf.freq = _positive_fft_frequency_grid(
+            self.trs.ttloop.freq, self.trs.tipTilt.nExp
+        )
         #2.2 wfs TF
         self.trs.ttloop.tf.wfs = _tt_sensor_integration_response(
             self.trs.ttloop.tf.freq, self.trs.ttloop.freq
