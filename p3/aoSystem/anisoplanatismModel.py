@@ -286,7 +286,15 @@ def focal_angular_function(tel, atm, src, gs, nActu, nOtf, samp, h_filt=1):
 
     #2\ SF Calculation
     Dani_l = np.zeros((src.nSrc, atm.nL, nOtf, nOtf))
-    n_ph = int(nActu*2 + 1)
+    # SLAO uses one deformable mirror; nActu1D can be a one-element
+    # NumPy array even though the geometrical calculation needs a scalar.
+    n_actu_values = np.asarray(nActu)
+    if n_actu_values.size != 1:
+        raise ValueError("Focal anisoplanatism requires a single DM actuator count")
+    n_actu = n_actu_values.item()
+    if not np.isfinite(n_actu) or n_actu <= 0 or n_actu != int(n_actu):
+        raise ValueError("DM actuator count must be a positive integer")
+    n_ph = 2 * int(n_actu) + 1
 
     # Angular frequencies
     X1, Y1, rhoX, rhoY = vector_to_separation(umax/n_ph * (np.array(range(n_ph)) - n_ph//2))
