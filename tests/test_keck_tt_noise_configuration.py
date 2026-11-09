@@ -16,6 +16,7 @@ def _fake_diagnosis():
     trs = NS(
         aoMode="LGS",
         dm=NS(com=rng.normal(0, 1e-7, (n, 4))),
+        holoop=NS(tf=NS(ctf=np.array([1.0]), wfs=np.array([1.0]))),
         tipTilt=NS(slopes=s),
         ttloop=NS(freq=125.0, tf=NS(
             freq=frequencies, rtf=np.ones_like(frequencies),
