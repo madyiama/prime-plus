@@ -134,6 +134,19 @@ def estimate_tt_noise(
     raw_cov = floor * nyquist
     cov, eigenvalues = _project_covariance_psd(raw_cov)
     observed = data.T @ data / len(data)
+    # Compare like with like: sensor noise passes through the measured-residual
+    # rejection response before it appears in the recorded centroids. It is
+    # incorrect to compare C_n (before loop filtering) directly with C_y.
+    rejection_integral = trapezoid(rejection_power, f)
+    mean_rejection_power = float(rejection_integral / nyquist)
+    predicted_observed_noise_cov = mean_rejection_power * cov
+    observed_diagonal = np.diag(observed)
+    ratio = np.diag(predicted_observed_noise_cov) / observed_diagonal
+    n_segments = 1 + (len(data)-nperseg)//(nperseg//2)
+    # Conservative, heuristic spectral sampling tolerance, not a calibrated CI.
+    guard_tolerance = max(0.10, 3.0 * np.sqrt(
+        2.0 / (n_segments * np.count_nonzero(fit))
+    ))
 
     diag = {
         "method": method,
@@ -151,6 +164,10 @@ def estimate_tt_noise(
         "unprojected_noise_eigenvalues_m2": eigenvalues.tolist(),
         "noise_covariance_m2": cov.tolist(),
         "observed_covariance_m2": observed.tolist(),
+        "mean_rejection_power": mean_rejection_power,
+        "predicted_observed_noise_covariance_m2": predicted_observed_noise_cov.tolist(),
+        "predicted_observed_noise_fraction_per_axis": ratio.tolist(),
+        "consistency_guard_relative_tolerance": guard_tolerance,
         "observed_variance_from_psd_m2": [
             float(trapezoid(pxx, f)), float(trapezoid(pyy, f)),
         ],
@@ -165,10 +182,12 @@ def estimate_tt_noise(
         "noise_model_validated": False,
         "units": "m² RMS-Zernike tip-tilt OPD",
     }
-    if np.any(np.diag(cov) >= np.diag(observed)):
+    if np.any(ratio > 1.0 + guard_tolerance):
         warnings.warn(
-            "van_dam noise variance exceeds the observed TT variance on "
-            "at least one axis; inspect gain, vibrations and fit band.",
+            "van_dam predicted filtered STRAP measurement noise is "
+            "significantly larger than the observed residual variance on "
+            "one or more axes; inspect fit band, loop transfer, gain and "
+            "vibration contamination.",
             RuntimeWarning, stacklevel=2,
         )
     return cov, diag
