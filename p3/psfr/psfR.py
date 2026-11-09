@@ -268,24 +268,27 @@ class psfR:
                         nperseg=self.tt_welch_nperseg,
                     )
                 )
-                # Important caveat: systemDiagnosis fits van Dam noise using
-                # P3's original tip-tilt rejection transfer (pure-delay plant).
-                # Propagating that same Cn through Ragland's different plant
-                # is a sensitivity experiment, NOT a self-consistent joint fit.
+                # Van Dam must identify Cn using the SAME W/K/P model as
+                # this physical covariance calculation. Legacy objects
+                # without model metadata are conservatively treated as
+                # having used the original pure-delay P3 rejection.
                 noise_method = getattr(
                     self.trs.tipTilt, 'noise_estimation_method', 'unknown'
                 )
+                rejection_mirror = getattr(
+                    self.trs.tipTilt, 'noise_rejection_mirror_model', 'unity'
+                )
                 noise_transfer_mismatch = (
                     noise_method == 'van_dam'
-                    and self.tt_mirror_model != 'unity'
+                    and self.tt_mirror_model != rejection_mirror
                 )
                 if noise_transfer_mismatch:
                     warnings.warn(
-                        "van Dam sensor-noise Cn was estimated with P3's "
-                        "pure-delay rejection transfer, but TT jitter now "
-                        "uses the Ragland actuator. This is a sensitivity "
-                        "study only: refit van Dam noise with the same W/K/P "
-                        "loop transfer before physical validation.",
+                        "van Dam measurement-noise covariance and physical "
+                        "TT propagation use different mirror models "
+                        f"({rejection_mirror} vs {self.tt_mirror_model}); "
+                        "the PSF is a sensitivity study only. Re-estimate "
+                        "sensor noise with the selected W/K/P response.",
                         RuntimeWarning,
                         stacklevel=2,
                     )
@@ -296,8 +299,10 @@ class psfR:
                     'tt_mirror_model': self.tt_mirror_model,
                     'mirror_model_verified_for_2020': False,
                     'measurement_noise_estimator': noise_method,
-                    'van_dam_rejection_model': 'p3_pure_delay' if
-                        noise_method == 'van_dam' else None,
+                    'van_dam_rejection_model': (
+                        'p3_pure_delay' if rejection_mirror == 'unity'
+                        else rejection_mirror
+                    ) if noise_method == 'van_dam' else None,
                     'noise_transfer_mismatch': noise_transfer_mismatch,
                     'tt_welch_nperseg': self.tt_welch_nperseg,
                     'raw_trace_m2': float(np.trace(self.Ctt)),

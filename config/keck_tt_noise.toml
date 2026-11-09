@@ -16,3 +16,16 @@ welch_nperseg = 512
 method = "legacy_psfr" # or "spectral_closed_loop"
 mirror_model = "unity" # or "ragland_2016_keck_ii" (published 2016 model)
 welch_nperseg = 512
+
+# Independent, UNCALIBRATED STRAP APD noise baseline.
+# The numbers below are idealized reference hypotheses, NOT values
+# independently measured for the Keck II APDs in 2020.
+# Optical centroid gain is NOT determined by these values or by APD_IMAT.
+[strap_apd_reference]
+effective_photoelectrons_per_count = 1.0
+excess_noise_factor = 1.0
+read_noise_variance_counts2 = 0.0
+sky_estimation_variance_counts2 = 0.0
+monte_carlo_trials = 128
+monte_carlo_seed = 2020
+calibration_status = "unverified_hypothesis"

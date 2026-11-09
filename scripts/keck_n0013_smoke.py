@@ -267,9 +267,17 @@ def main():
         str(args.calib.resolve()), path_save=str(args.output.resolve()),
         cam_fov=128, nLayer=1, addNCPA=False,
     ))
+    # The noise estimator and the physical jitter must share a single
+    # W/K/P rejection model. For legacy PSF-R, keep the historical unity
+    # transfer regardless of an unused TT mirror selection.
+    noise_mirror = (
+        tt_mirror_model if tt_jitter_model == "spectral_closed_loop"
+        else "unity"
+    )
+    print(f"[STRAP van Dam] rejection mirror={noise_mirror}", flush=True)
     sd = stage("systemDiagnosis", lambda: systemDiagnosis(
         trs, tt_noise_method=tt_method, tt_noise_high_band=tt_band,
-        tt_noise_nperseg=tt_nperseg,
+        tt_noise_nperseg=tt_nperseg, tt_mirror_model=noise_mirror,
     ))
     noise_diagnostics = sd.trs.tipTilt.noise_estimation_diagnostics
     (args.output / "tt_noise_diagnostics.json").write_text(
@@ -328,6 +336,7 @@ def main():
         "tt_noise_config": str(args.config.resolve()),
         "tt_jitter_covariance_method": tt_jitter_model,
         "tt_mirror_model": tt_mirror_model,
+        "tt_noise_rejection_mirror_model": noise_mirror,
         "tt_jitter_welch_nperseg": tt_jitter_nperseg,
         "tt_jitter_noise_model_validated": False,
         "tt_jitter_otf_enabled": not args.disable_tt_jitter,

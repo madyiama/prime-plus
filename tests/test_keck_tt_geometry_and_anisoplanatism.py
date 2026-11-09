@@ -59,6 +59,9 @@ def test_psfr_with_excessive_noise_has_physical_jitter_otf_and_diagnostics():
         [1e-6, 0.0], [-1e-6, 0.0], [0.0, 1e-6], [0.0, -1e-6],
     ])
     model = psfR.__new__(psfR)
+    # __new__ bypasses __init__: explicitly select the historical covariance
+    # path that this non-PSD projection regression is meant to exercise.
+    model.tt_covariance_mode = 'legacy_psfr'
     model.trs = NS(
         tipTilt=NS(
             slopes=samples, nExp=len(samples),
