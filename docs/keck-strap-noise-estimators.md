@@ -33,10 +33,18 @@ eigenvalues are exported.
 
 **Assumptions and limitations:**
 
-- The transfer S(f) and the centroid gain have to be calibrated for the
-  observed Keck control loop; this first version consumes P3's existing
-  transfer function, whose phase conventions still need independent
-  verification.
+- The transfer S(f) and centroid gain have to be calibrated for the
+  observed Keck control loop. This PR corrects the TT-specific boxcar
+  integration response to sinc(f/fs)*exp(-i*pi*f/fs) and the pure delay
+  to exp(-2*pi*i*f*delay_seconds) (analytic unit tests included).
+  The servo filter, effective centroid gain and timing/latency calibration
+  remain to be verified with STRAP observations.
+- The HO transfer function remains unchanged in this TT-specific sprint;
+  its historical frequency/phase conventions must be audited separately.
+- Consistency warning compares the *predicted filtered noise contribution*
+  integral(|S|² * N0 df) with the observed covariance. A conservative
+  spectral-sampling tolerance is heuristic, not a formal confidence interval;
+  diagnostics retain the comparison and its threshold.
 - The selected high-frequency band must be dominated by measurement
   noise; atmospheric power and vibration peaks can bias the result.
 - The procedure is not the complete van Dam calibration: it does not
