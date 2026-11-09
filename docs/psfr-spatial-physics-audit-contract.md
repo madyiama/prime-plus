@@ -137,3 +137,55 @@ uv run --with pytest python -m pytest -q
 ```
 
 Aucun test de ce nouveau commit n'a été exécuté par l'assistant.
+
+
+## Contrôle complémentaire — espace fréquentiel et longueur d'onde (09/11/2026)
+
+Périmètre : `psfR` Keck `psdExpansion=False`, sans fitting d'image.
+
+- `frequencyDomain.PSDstep = 1/(D*sampRef)` [m⁻¹],
+  `nOtf=nPix*kRef`, `U=2(q-nOtf/2)/nOtf`.
+- Échantillonnage caméra `p` [rad/pixel] :
+  `sampRef = kRef*lambda_ref/(D*p)`, donc la fréquence angulaire
+  `(D/lambda_ref)*(sampRef/2)*U =
+  (q-nOtf/2)/(nPix*p)`.
+  **Le diamètre et la longueur d'onde se compensent exactement dans
+  l'échantillonnage du noyau de jitter gaussien à échelle angulaire
+  de pixel fixée.** Ce dernier n'est pas une WFE en phase à
+  re-normaliser comme `r0`.
+- `DTTCENTROIDS` présumés en arcsec ; `a = D theta / 4` [m RMS
+  Zernike], puis `Ctheta = (4/D)^2 C_OPD`. Ces deux conversions
+  s'annulent algébriquement, sous réserve que l'échelle réelle des
+  centroïdes soit angulaire. L'APD_IMAT n'établit pas cette calibration.
+- `psfR` traite aujourd'hui ses 3 composantes de bande avec
+  **une seule SF/OTF calculée à `wvlRef=min(wvl_bins)`**, puis
+  des poids photométriques. C'est une approximation monochromatique
+  à la longueur d'onde de référence, pas une vraie intégration de
+  trois PSF chromatiques. Ce n'est pas l'origine du surplus de
+  jitter angulaire, mais cela limite la précision du Strehl/premier
+  anneau de la PSF en bande large.
+- Correction scientifique additionnelle : `atmosphere.wvl` modifiait
+  `atm.r0` sans modifier les Fried lengths `atm.layer[l].r0`.
+  L'appel `atm.slab()` après la conversion 500 nm -> bande K
+  devenait incohérent. Le setter convertit désormais simultanément
+  tous les `r0`, avec contrôle aller-retour 500 nm <-> K.
+  Sur le chemin Keck actuel, les noyaux anisoplanatiques normalisés
+  sont préparés avant le changement de wavelength ; ce bug n'est
+  donc pas établi comme cause du flou TT de `n0013`.
+- Diagnostic WFE corrigé : pour `TOTAL ANISOPLANATISM`, la longueur
+  d'onde au dénominateur doit être `freq.wvlRef` et non la
+  longueur d'onde centrale `ao.src.wvl[0]`, afin de correspondre
+  au forward SF.
+
+Le script `keck_n0013_smoke.py` écrit maintenant
+`frequency_grid_diagnostics.json` avec les paramètres de grille,
+la longueur d'onde de référence, le pixel scale prédit/mesuré et
+la conversion STRAP. Le test synthétique
+`test_jitter_otf_frequency_grid_has_correct_camera_pixel_scale_at_any_wavelength`
+vérifie indépendamment le noyau aux longueurs d'onde 1.65,
+2.055501 et 2.35 µm.
+
+**Limite instrumentale non levée :** la preuve des unités en arcsec
+et du gain optique STRAP en 2020 requiert une calibration de
+l'interaction miroir/centroïdes ou une méthode indépendante ; le
+simple accord avec l'image binaire ne suffit pas.
