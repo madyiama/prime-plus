@@ -110,8 +110,10 @@ def test_benchmark_is_deterministic_and_requires_valid_band():
         b["nominal_full_record"]["trace_sensor_noise_m2"])
     with pytest.raises(ValueError, match="Bands"):
         _run(data, fs, freq, rejection, bands=[(0.9, 0.5)])
-    with pytest.raises(ValueError, match="positive"):
+    with pytest.raises(ValueError, match="finite and non-negative"):
         _run(data, fs, freq, rejection, noise_transfer_factor=-0.1)
+    with pytest.raises(ValueError, match="finite and non-negative"):
+        _run(data, fs, freq, rejection, noise_transfer_factor=float("nan"))
 
 
 def test_outputs_are_reproducible_and_include_scalar_csv(tmp_path):
