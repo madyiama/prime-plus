@@ -216,6 +216,19 @@ def main():
         "rejection_gain_sensor_to_measured_residual":
             float(rejection_gain),
         "observed_centroid_covariance_m2": observed_cov.tolist(),
+        "apd_archive_calibration": {
+            "imat_raw": imat.tolist(),
+            "sky_background_raw_counts": sky.tolist(),
+            "apd_threshold_raw": np.asarray(
+                sav.get("apd_threshold", []), dtype=float
+            ).reshape(-1).tolist(),
+            "raw_count_min": float(raw.min()),
+            "raw_count_max": float(raw.max()),
+            "raw_count_mean_per_channel": raw.mean(axis=0).tolist(),
+            "background_subtracted_flux_mean": 
+                independent_reproduction["mean_net_counts_per_frame"],
+            "independently_calibrated_2020": False,
+        },
         "raw_apd_centroid_reproduction": independent_reproduction,
         "apd_first_order": apd_audit,
         "apd_poisson_monte_carlo": mc_audit,
