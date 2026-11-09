@@ -28,6 +28,24 @@ rad2mas = 3600 * 180 * 1000 / np.pi
 rad2arc = rad2mas / 1000
 arc2rad = 1/rad2arc
 
+
+def _tt_sensor_integration_response(freq_hz, sample_rate_hz):
+    """Causal boxcar integration over one STRAP sample interval.
+
+    scipy/NumPy sinc(x) = sin(pi*x)/(pi*x).
+    """
+    normalized_frequency = np.asarray(freq_hz) / sample_rate_hz
+    return (np.sinc(normalized_frequency) *
+            np.exp(-1j * np.pi * normalized_frequency))
+
+
+def _tt_latency_response(freq_hz, sample_rate_hz, delay_frames):
+    """Phase delay exp(-i*2*pi*f*delay_seconds), delay in frames."""
+    return np.exp(
+        -2j * np.pi * np.asarray(freq_hz) * delay_frames / sample_rate_hz
+    )
+
+
 class systemDiagnosis:
 
     def __init__(self, trs, noiseMethod='autocorrelation', nshift=1, nfit=2,
@@ -128,9 +146,14 @@ class systemDiagnosis:
         #2.1. Define the frequency vectors
         self.trs.ttloop.tf.freq = np.linspace(self.trs.ttloop.freq/self.trs.tipTilt.nExp,self.trs.tipTilt.nExp/2,self.trs.tipTilt.nExp//2)*self.trs.ttloop.freq/self.trs.tipTilt.nExp
         #2.2 wfs TF
-        self.trs.ttloop.tf.wfs  = wfs_transfer_function(self.trs.ttloop.tf.freq,self.trs.ttloop.freq)
+        self.trs.ttloop.tf.wfs = _tt_sensor_integration_response(
+            self.trs.ttloop.tf.freq, self.trs.ttloop.freq
+        )
         #2.3 TT Lag tf
-        self.trs.ttloop.tf.lag = delay_transfer_function(self.trs.ttloop.tf.freq,self.trs.ttloop.freq,self.trs.ttloop.lat*self.trs.ttloop.freq)
+        self.trs.ttloop.tf.lag = _tt_latency_response(
+            self.trs.ttloop.tf.freq, self.trs.ttloop.freq,
+            self.trs.ttloop.lat * self.trs.ttloop.freq,
+        )
         #2.4 TT servo tf
         self.trs.ttloop.tf.servo = servo_transfer_function(self.trs.ttloop.tf.freq,self.trs.ttloop.freq,self.trs.ttloop.tf.num,self.trs.ttloop.tf.den)
         #2.5 open loop tf
