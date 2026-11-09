@@ -172,9 +172,11 @@ def modes2Otf(Cmm, modes, pupil, n_otf, samp=2, basis='Vii'):
                 dphi = fft.fftshift(2*dphi)*den*msk
         otf = G*np.exp(-0.5*dphi)
     else:
-        #Diffraction-limit case
+        # Diffraction-limited case: a zero modal covariance must return
+        # exactly zero phase structure function (without undefined locals).
         G = G/G.max()
         otf = G
+        dphi = np.zeros_like(G)
 
     # Interpolation of the OTF => determination of the PSF fov
     otf = otf*(G>1e-5) #3.6 ms
