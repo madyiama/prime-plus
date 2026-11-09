@@ -274,23 +274,31 @@ class psfR:
                     'jitter_covariance_method': 'spectral_closed_loop',
                     'tt_mirror_model': self.tt_mirror_model,
                     'mirror_model_verified_for_2020': False,
+                    'measurement_noise_estimator': getattr(
+                        self.trs.tipTilt, 'noise_estimation_method', 'unknown'
+                    ),
+                    'tt_welch_nperseg': self.tt_welch_nperseg,
                     'raw_trace_m2': float(np.trace(self.Ctt)),
                     'noise_trace_m2': float(np.trace(noise_raw)),
-                    'noise_transfer_factor': float(self.trs.ttloop.tf.pn),
-                    'corrected_trace_m2': float(np.trace(self.tt_atmos_cov)),
-                    'corrected_eigenvalues_m2': np.linalg.eigvalsh(
-                        self.tt_atmos_cov
-                    ).tolist(),
-                    'atmospheric_projected_trace_m2': float(
+                    'historical_pn_for_comparison': float(
+                        self.trs.ttloop.tf.pn
+                    ),
+                    'physical_atmos_trace_m2': float(
                         np.trace(self.tt_atmos_cov)
                     ),
-                    'noise_propagated_trace_m2': float(
+                    'physical_noise_trace_m2': float(
                         np.trace(self.tt_noise_cov)
                     ),
-                    'model_jitter_trace_m2': float(
+                    'physical_total_trace_m2': float(
                         np.trace(self.tt_model_cov)
                     ),
-                    'negative_variance_projected': False,
+                    'physical_atmos_eigenvalues_m2': np.linalg.eigvalsh(
+                        self.tt_atmos_cov
+                    ).tolist(),
+                    'physical_total_eigenvalues_m2': np.linalg.eigvalsh(
+                        self.tt_model_cov
+                    ).tolist(),
+                    'covariance_projection_applied': False,
                     'noise_model_validated': False,
                     'command_units_verified': bool(
                         getattr(self.trs.tipTilt, 'command_units_verified', False)
