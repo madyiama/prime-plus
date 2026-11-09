@@ -505,14 +505,13 @@ class psfR:
         # noise on tip-tilt modes
         if self.compute_dphi_jitter:
             noise_cov = self.tt_noise_cov
+            dphi_tt_n = self.jitter_phase_structure_function(Ctt=noise_cov)
+            sr_tt_n = np.sum(otf_dl * np.exp(-0.5*dphi_tt_n))/S
+            self.wfe['TT NOISE'] = sr2fwe(sr_tt_n)
         else:
-            noise_cov, _ = project_covariance_to_psd(
-                self.trs.ttloop.tf.pn * self.trs.tipTilt.Cn_tt,
-                label="TT propagated noise covariance",
-            )
-        dphi_tt_n = self.jitter_phase_structure_function(Ctt=noise_cov)
-        sr_tt_n = np.sum(otf_dl * np.exp(-0.5*dphi_tt_n))/S
-        self.wfe['TT NOISE'] = sr2fwe(sr_tt_n)
+            # A diagnostic TT ablation removes both atmospheric and noise
+            # jitter from the forward model; its error budget must do likewise.
+            self.wfe['TT NOISE'] = 0.0
 
         #5. AO BANDWIDTH ERROR
         C = self.Cao - (1+self.trs.holoop.tf.pn)*self.trs.wfs.Cn_ao
@@ -570,8 +569,11 @@ class psfR:
             self.wfe['FOCAL ANISOPLANATISM']   = 0
 
         #9. TOTAL WFE
-        self.wfe['TOTAL WFE'] =  np.sqrt(self.wfe['NCPA']**2 +  self.wfe['FITTING']**2
-                + self.wfe['HO NOISE']**2 + self.wfe['TT NOISE']**2 + self.wfe['SERVO-LAG']**2
+        # Approximate Maréchal-equivalent WFE budget: include every spatial
+        # term used in the forward OTF, including WFS aliasing.
+        self.wfe['TOTAL WFE'] = np.sqrt(self.wfe['NCPA']**2 + self.wfe['FITTING']**2
+                + self.wfe['ALIASING']**2 + self.wfe['HO NOISE']**2
+                + self.wfe['TT NOISE']**2 + self.wfe['SERVO-LAG']**2
                 + self.wfe['TIP-TILT']**2 + self.wfe['TOTAL ANISOPLANATISM']**2)
 
         self.wfe['TOTAL WFE WITH PIXEL'] = np.hypot(self.wfe['TOTAL WFE'],self.wfe['PIXEL TF'])
