@@ -303,3 +303,58 @@ def simulate_integrator_delay(disturbance_opd_m, noise_opd_m, gain):
         command[t] = u_last
     return {"physical_residual_m": residual, "measured_centroids_m": measured,
             "control_command_m": command}
+
+
+def physical_tt_covariance_from_telemetry(
+    samples_opd_m, sensor_noise_cov_m2, ttloop, *,
+    mirror_model="unity", nperseg=512,
+):
+    """Estimate physical on-axis TT covariance for an explicit loop model.
+
+    Uses the same PSD decomposition as the independent Keck TT loop audit.
+    Inputs: RMS-Zernike-OPD centroid series and measurement-noise covariance.
+
+    Returns (atmospheric, propagated_noise, total, diagnostics), all in m².
+    This is model-conditional, not a calibration on NIRC2 images.
+    """
+    model = from_p3_tiptilt_loop(ttloop, mirror_model=mirror_model)
+    fs = float(ttloop.freq)
+    freq_welch, cospectrum = measured_tiptilt_cospectrum(
+        samples_opd_m, fs, nperseg=nperseg,
+    )
+    # Welch grid is 0..Nyquist. P3's frequency grid is close to both
+    # limits but does not necessarily contain the endpoints.
+    on_loop_grid = np.array([
+        [
+            np.interp(model.frequency_hz, freq_welch, cospectrum[i, j])
+            for j in range(2)
+        ]
+        for i in range(2)
+    ])
+    result = propagate_spectral_covariances(
+        model, on_loop_grid, sensor_noise_cov_m2, fs,
+    )
+    atmosphere = np.asarray(result["physical_atmos_cov_m2"], dtype=float)
+    noise = np.asarray(result["physical_noise_cov_m2"], dtype=float)
+    total = np.asarray(result["physical_total_cov_m2"], dtype=float)
+
+    # No silent covariance repair. Negative eigenvalues may reveal an
+    # invalid noise estimator, loop gain or calibration.
+    for label, matrix in (
+        ("atmospheric", atmosphere),
+        ("propagated noise", noise),
+        ("total", total),
+    ):
+        symmetric = 0.5 * (matrix + matrix.T)
+        eig = np.linalg.eigvalsh(symmetric)
+        if not np.all(np.isfinite(eig)):
+            raise ValueError(f"TT {label} physical covariance is not finite")
+        scale = max(float(np.max(np.abs(eig))), 1e-30)
+        if eig[0] < -1e-10 * scale:
+            raise ValueError(
+                f"TT {label} physical covariance is non-PSD; "
+                f"eigenvalues={eig.tolist()} m². "
+                "Inspect the closed-loop audit and STRAP calibration "
+                "instead of clipping covariance or tuning the PSF."
+            )
+    return atmosphere, noise, total, result
