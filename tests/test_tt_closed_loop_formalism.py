@@ -236,3 +236,33 @@ def test_measured_psd_recovers_physical_jitter_with_correlated_turbulence():
     )
     assert np.trace(result["physical_atmos_cov_m2"]) > 0
     assert np.trace(result["physical_noise_cov_m2"]) > 0
+
+
+def test_p3_pn_equals_physical_noise_gain_only_for_unit_modulus_plant():
+    """Historical P3 ntf=K*S has physical meaning iff |P|=1."""
+    fs = 125.0
+    f = np.linspace(0, fs/2, 4097)
+    W = np.sinc(f/fs)*np.exp(-1j*np.pi*f/fs)
+    K = np.full(f.shape, 0.35+0j)
+    pure_delay = np.exp(-2j*np.pi*f/fs)
+    model_delay = closed_loop_transfers(
+        f, sensor=W, controller=K, plant=pure_delay,
+    )
+    historical_gain = 2/fs * np.trapezoid(
+        np.abs(model_delay.command_sensor_noise)**2, f,
+    )
+    physical_gain = 2/fs * np.trapezoid(
+        np.abs(model_delay.physical_sensor_noise)**2, f,
+    )
+    assert physical_gain == pytest.approx(historical_gain, rel=1e-12)
+    mirror = keck_ii_mirror_ragland_2016(f)
+    model_mirror = closed_loop_transfers(
+        f, sensor=W, controller=K, plant=pure_delay*mirror,
+    )
+    actual_mirror_gain = 2/fs * np.trapezoid(
+        np.abs(model_mirror.physical_sensor_noise)**2, f,
+    )
+    command_only_gain = 2/fs * np.trapezoid(
+        np.abs(model_mirror.command_sensor_noise)**2, f,
+    )
+    assert abs(actual_mirror_gain - command_only_gain) > 0.01*command_only_gain
