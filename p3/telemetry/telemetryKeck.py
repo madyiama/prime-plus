@@ -378,8 +378,8 @@ class telemetryKeck:
         # Keck STRAP DTTCENTROIDS are calibrated angular offsets (arcsec);
         # APD_IMAT has already been applied in the telemetry. Do not apply
         # the old empirical 0.18 and 3.2 factors again.
-        self.tipTilt.tilt2meter = zernike_tilt_opd_per_arcsec(self.tel.D)
         if 'b' in trsData:
+            self.tipTilt.tilt2meter = zernike_tilt_opd_per_arcsec(self.tel.D)
             self.tipTilt.slopes_arcsec = np.copy(trsData.B['DTTCENTROIDS'][0])
             self.tipTilt.slopes = np.copy(self.tipTilt.slopes_arcsec)
             self.tipTilt.com_raw = np.copy(trsData.B['DTTCOMMANDS'][0])
@@ -390,6 +390,9 @@ class telemetryKeck:
             # Keck RTC command telemetry before using command covariances.
             self.tipTilt.command_units_verified = False
         else:
+            # Preserve historical NGS conversion until NGS telemetry units
+            # have been independently verified (outside this LGS-only fix).
+            self.tipTilt.tilt2meter = self.tel.D * np.pi/(180*3600)
             self.tipTilt.slopes = np.copy(
                 trsData.A['RESIDUALWAVEFRONT'][0][:,self.dm.nCom:self.dm.nCom+2]
             )  # historical NGS path: assumed arcsec, not validated here
