@@ -537,7 +537,10 @@ class psfR:
 
         #8. ANISOPLANATISM
         if self.freq.isAniso:
-            Cn2     = self.ao.atm.weights * self.ao.atm.r0**(-5/3) * (self.ao.atm.wvl/self.ao.src.wvl[0])**2
+            # Use the same reference wavelength as phase_structure_function;
+            # ao.src.wvl[0] is the *central* science wavelength, whereas
+            # freq.wvlRef may be the shortest spectral bin.
+            Cn2     = self.ao.atm.weights * self.ao.atm.r0**(-5/3) * (self.ao.atm.wvl/self.freq.wvlRef)**2
             dani    = (self.dphi_ani[0].transpose(1,2,0) * Cn2).sum(axis=2)
             otf_ani = np.exp(-0.5 * dani)
             sr_ani  = np.sum(otf_dl * otf_ani)/S
