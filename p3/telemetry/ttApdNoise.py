@@ -57,8 +57,8 @@ def apd_imat_matrix(apd_imat):
 def _validate_counts(raw_counts, sky_background):
     raw = np.asarray(raw_counts, dtype=float)
     sky = np.asarray(sky_background, dtype=float).reshape(-1)
-    if raw.ndim != 2 or raw.shape[1] != 4 or len(raw) < 2:
-        raise ValueError("APDCOUNTS must be a (frames>=2, 4) array")
+    if raw.ndim != 2 or raw.shape[1] != 4 or len(raw) < 1:
+        raise ValueError("APDCOUNTS must be a nonempty (frames, 4) array")
     if sky.shape != (4,):
         raise ValueError("APD_SKY_BACK must have four detector values")
     if (not np.isfinite(raw).all() or not np.isfinite(sky).all()
