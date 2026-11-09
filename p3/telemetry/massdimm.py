@@ -35,7 +35,7 @@ class DIMM(object):
         r0
 
         """
-        table = read_csv(dimmfile, delim_whitespace=True, names= \
+        table = read_csv(dimmfile, sep=r'\s+', names= \
             ['year', 'month', 'day', 'hour', 'minute', 'second', 'seeing'])
         self.verbose = verbose
         # Date and time are in HST
@@ -107,7 +107,7 @@ class MASS(object):
         self.file = massfile
         self.verbose = verbose
         # redid this to not use asciidata module but pandas instead
-        table = read_csv(massfile, delim_whitespace=True, names= \
+        table = read_csv(massfile, sep=r'\s+', names= \
             ['year', 'month', 'day', 'hour', 'minute', 'second', 'seeing'])
 
         # Date and time are in HST
@@ -176,7 +176,7 @@ class MASSPROF(object):
         self.file = proffile
         self.verbose = verbose
         # redid this to not use asciidata module but pandas instead
-        table = read_csv(proffile, delim_whitespace=True, names= \
+        table = read_csv(proffile, sep=r'\s+', names= \
             ['year', 'month', 'day', 'hour', 'minute', 'second', \
             'cn2dh_05', 'cn2dh_1', 'cn2dh_2', 'cn2dh_4', 'cn2dh_8', \
             'cn2dh_16', 'seeing'])

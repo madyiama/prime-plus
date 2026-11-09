@@ -8,6 +8,7 @@ Created on Fri Apr  9 16:04:21 2021
 
 #%% MANAGE PYTHON LIBRAIRIES
 import numpy as np
+from scipy.integrate import trapezoid
 import numpy.fft as fft
 import p3.aoSystem.FourierUtils as FourierUtils
 from p3.aoSystem.zernike import zernike
@@ -111,7 +112,7 @@ class systemDiagnosis:
         self.trs.holoop.tf.rtf = 1 - self.trs.holoop.tf.ctf
         #1.8. noise transfer function
         self.trs.holoop.tf.ntf = np.squeeze(self.trs.holoop.tf.servo/(1+self.trs.holoop.tf.ol))
-        self.trs.holoop.tf.pn  = (np.trapz(abs(self.trs.holoop.tf.ntf)**2 , self.trs.holoop.tf.freq)*2/self.trs.holoop.freq)
+        self.trs.holoop.tf.pn  = (trapezoid(abs(self.trs.holoop.tf.ntf)**2 , self.trs.holoop.tf.freq)*2/self.trs.holoop.freq)
 
         # 2\ TT LOOP
         #2.1. Define the frequency vectors
@@ -130,7 +131,7 @@ class systemDiagnosis:
         self.trs.ttloop.tf.rtf = 1 - self.trs.ttloop.tf.ctf
         #2.8 noise transfer function
         self.trs.ttloop.tf.ntf = np.squeeze(self.trs.ttloop.tf.servo/(1+self.trs.ttloop.tf.ol))
-        self.trs.ttloop.tf.pn  = (np.trapz(abs(self.trs.ttloop.tf.ntf)**2 , self.trs.ttloop.tf.freq)*2/self.trs.ttloop.freq)
+        self.trs.ttloop.tf.pn  = (trapezoid(abs(self.trs.ttloop.tf.ntf)**2 , self.trs.ttloop.tf.freq)*2/self.trs.ttloop.freq)
 
     def get_number_photons(self):
         """

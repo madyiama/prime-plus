@@ -7,6 +7,7 @@ Created on Sat Aug 18 22:20:28 2018
 """
 #%% MANAGE PYTHON LIBRAIRIES
 import time
+import warnings
 import sys as sys
 
 import numpy as np
@@ -21,6 +22,29 @@ from p3.aoSystem.frequencyDomain import frequencyDomain as frequencyDomain
 #%%
 rad2mas = 3600 * 180 * 1000 / np.pi
 rad2arc = rad2mas / 1000
+
+
+def _sqrt_checked_variance(variance, label):
+    """Keep negative noise-subtracted variances invalid rather than masking them."""
+    variance = float(variance)
+    if not np.isfinite(variance) or variance < 0:
+        warnings.warn(
+            f"{label}: invalid noise-subtracted variance {variance:.6e}; "
+            "check tip-tilt noise estimation and loop transfer model.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return np.nan
+    return np.sqrt(variance)
+
+
+def _integrate_spectral_psf(psf):
+    """Combine spectral slices into the 2-D broadband image for a Strehl check."""
+    if psf.ndim == 2:
+        return psf
+    if psf.ndim == 3:
+        return np.sum(psf, axis=-1)
+    raise ValueError("Expected a 2-D PSF or a 3-D wavelength cube")
 
 class psfR:
     """
@@ -330,13 +354,27 @@ class psfR:
         #6. RESIDUAL TIP-TILT
         if self.compute_dphi_jitter:
             C = self.Ctt - (1+self.trs.ttloop.tf.pn)*self.trs.tipTilt.Cn_tt
+            self.tiptilt_diagnostics = {
+                'raw_trace_m2': float(np.trace(self.Ctt)),
+                'noise_trace_m2': float(np.trace(self.trs.tipTilt.Cn_tt)),
+                'noise_transfer_factor': float(self.trs.ttloop.tf.pn),
+                'corrected_trace_m2': float(np.trace(C)),
+                'corrected_eigenvalues_m2': np.linalg.eigvalsh(
+                    (C + C.T)/2
+                ).tolist(),
+            }
             sr_tt = np.sum(otf_dl * np.exp(-0.5*self.dphi_tt))/S
-            self.wfe['TIP-TILT'] = np.sqrt(sr2fwe(sr_tt)**2 - self.wfe['TT NOISE']**2)
+            self.wfe['TIP-TILT'] = _sqrt_checked_variance(
+                sr2fwe(sr_tt)**2 - self.wfe['TT NOISE']**2,
+                'TIP-TILT noise-corrected equivalent WFE',
+            )
         else:
             F = self.trs.mat.DMTTRem
             C = np.dot(F, np.dot(C, F.T))
             self.wfe['TIP-TILT'] = 0
-        self.wfe['TIP-TILT-WFE'] = np.sqrt(C.trace()/2)*1e9
+        self.wfe['TIP-TILT-WFE'] = 1e9 * _sqrt_checked_variance(
+            C.trace()/2, 'TIP-TILT covariance trace',
+        )
 
         #7. PIXEL TF
         sr_pixel = np.sum(otf_dl * self.otfPixel)/S
@@ -396,8 +434,10 @@ class psfR:
         else:
             self.psf = self(list(self.ao.atm.weights*self.ao.atm.r0**(-5/3)) +  [1, 1])
         self.wfe['PSFR SR OTF'] = self.SR[0]
-        self.wfe["PSFR SR PEAK"] = 1e2*FourierUtils.getStrehl(self.psf, self.ao.tel.pupil,
-                                                              self.freq.sampRef)
+        self.wfe["PSFR SR PEAK"] = 1e2*FourierUtils.getStrehl(
+            _integrate_spectral_psf(self.psf), self.ao.tel.pupil,
+            self.freq.sampRef, method='max',
+        )
 
 
 
