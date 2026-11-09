@@ -33,3 +33,43 @@ def test_tt_delay_from_seconds_and_frames_are_equivalent():
     actual = _tt_latency_response(frequencies, fs, delay_seconds*fs)
     expected = np.exp(-2j * np.pi * frequencies * delay_seconds)
     np.testing.assert_allclose(actual, expected, atol=1e-14)
+
+
+def test_loop_positive_fft_grid_uses_sample_rate_once():
+    from p3.telemetry.systemDiagnosis import _positive_fft_frequency_grid
+
+    fs, n = 125.0, 4278
+    f = _positive_fft_frequency_grid(fs, n)
+    np.testing.assert_allclose(f, np.fft.rfftfreq(n, d=1 / fs)[1:])
+    assert f[0] == pytest.approx(fs / n)
+    assert f[-1] == pytest.approx(fs / 2)
+    assert len(f) == n // 2
+
+
+def test_high_order_loop_boxcar_and_lag_use_same_physical_time_units_as_strap():
+    """HO integration/delay must use 2*pi*f*t, not just f*t."""
+    from types import SimpleNamespace as NS
+    from p3.telemetry.systemDiagnosis import systemDiagnosis
+
+    def loop(fs, seconds):
+        return NS(
+            freq=fs, lat=seconds,
+            tf=NS(num=np.array([0.3, 0., 0., 0.]),
+                  den=np.array([0., 0., 0.])),
+        )
+
+    sd = systemDiagnosis.__new__(systemDiagnosis)
+    sd.trs = NS(
+        holoop=loop(500., 0.002),
+        ttloop=loop(125., 0.008),
+        wfs=NS(nExp=512),
+        tipTilt=NS(nExp=512),
+    )
+    sd.temporal_transfer_function()
+    for lo in (sd.trs.holoop, sd.trs.ttloop):
+        f = lo.tf.freq
+        expected_sensor = np.sinc(f / lo.freq) * np.exp(-1j*np.pi*f/lo.freq)
+        expected_lag = np.exp(-2j*np.pi*f*lo.lat)
+        np.testing.assert_allclose(lo.tf.wfs, expected_sensor, atol=1e-14)
+        np.testing.assert_allclose(lo.tf.lag, expected_lag, atol=1e-14)
+        assert f[0] == pytest.approx(lo.freq / 512)
