@@ -43,7 +43,7 @@ class deformableMirror:
             nActu1D = [int(nActu1D)]
 
         # geometry
-        self.nActu1D      = np.array(nActu1D, dtype=self.dtype)
+        self.nActu1D      = np.array(nActu1D, dtype=int)
         self.pitch        = np.array(pitch, dtype=self.dtype)
         self.heights      = np.array(heights, dtype=self.dtype)
         self.nDMs         = len(pitch)
