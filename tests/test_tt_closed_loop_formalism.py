@@ -190,3 +190,41 @@ def test_transfer_and_noise_validation_reject_nonphysical_inputs():
         propagate_spectral_covariances(
             model, np.zeros((2,2,3)), np.eye(2)*1e-13, 125.
         )
+
+
+def test_measured_psd_recovers_physical_jitter_with_correlated_turbulence():
+    """Independent closed-loop time series with colored disturbance and noise."""
+    fs, gain, n_samples = 125.0, 0.35, 65536
+    rng = np.random.default_rng(222)
+    noise = rng.normal(0, (2e-7, 3e-7), (n_samples, 2))
+    innovation = rng.normal(0, (5e-8, 7e-8), (n_samples, 2))
+    disturbance = np.zeros_like(noise)
+    for i in range(1, n_samples):
+        disturbance[i] = 0.98*disturbance[i-1] + innovation[i]
+    sim = simulate_integrator_delay(disturbance, noise, gain)
+    y = sim["measured_centroids_m"][2048:]
+    e = sim["physical_residual_m"][2048:]
+    frequency, power = measured_tiptilt_cospectrum(y, fs, nperseg=1024)
+    S, T = integrator_delay_transfers(frequency, fs, gain)
+    from p3.telemetry.ttClosedLoop import TTClosedLoop
+    # Effective *closed-loop* responses exactly derived for this integrator;
+    # the open-loop K has a pole at f=0, so test the finite S/T forms.
+    model = TTClosedLoop(
+        frequency_hz=frequency,
+        sensor=np.ones_like(S),
+        controller=np.full_like(S, np.nan),
+        plant=np.full_like(S, np.nan),
+        loop=np.full_like(S, np.nan),
+        sensitivity=S, measured_disturbance=S,
+        measured_sensor_noise=S, physical_disturbance=S,
+        physical_sensor_noise=-T, command_sensor_noise=-T,
+    )
+    covariance = np.diag([(2e-7)**2, (3e-7)**2])
+    result = propagate_spectral_covariances(model, power, covariance, fs)
+    physical_from_spectra = np.diag(result["physical_total_cov_m2"])
+    physical_from_time_series = np.diag(_cov(e))
+    np.testing.assert_allclose(
+        physical_from_spectra, physical_from_time_series, rtol=0.12
+    )
+    assert np.trace(result["physical_atmos_cov_m2"]) > 0
+    assert np.trace(result["physical_noise_cov_m2"]) > 0
