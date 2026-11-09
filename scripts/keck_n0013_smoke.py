@@ -217,13 +217,14 @@ def main():
     )
     args = parser.parse_args()
     with args.config.open("rb") as conf_file:
-        noise_config = tomllib.load(conf_file).get("tip_tilt_noise", {})
+        full_config = tomllib.load(conf_file)
+    noise_config = full_config.get("tip_tilt_noise", {})
     tt_method = args.tt_noise_method or noise_config.get("method", "van_dam")
     tt_band = (args.tt_noise_band if args.tt_noise_band is not None
                else noise_config.get("high_frequency_band", [0.65, 0.95]))
     tt_nperseg = (args.tt_welch_nperseg if args.tt_welch_nperseg is not None
                    else noise_config.get("welch_nperseg", 512))
-    jitter_config = tomllib.load(open(args.config, "rb")).get("tip_tilt_jitter", {})
+    jitter_config = full_config.get("tip_tilt_jitter", {})
     tt_jitter_model = args.tt_jitter_model or jitter_config.get("method", "legacy_psfr")
     tt_mirror_model = args.tt_mirror_model or jitter_config.get("mirror_model", "unity")
     tt_jitter_nperseg = (
