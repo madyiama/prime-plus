@@ -12,6 +12,7 @@ import os
 from scipy.io import readsav
 from astropy.io import fits
 from p3.aoSystem.deformableMirror import deformableMirror
+from p3.aoSystem.tipTiltGeometry import zernike_tilt_opd_per_arcsec
 import p3.aoSystem.FourierUtils as FourierUtils
 import p3.telemetry.keckUtils as keckUtils
 from p3.telemetry.massdimm import fetch_data, DIMM, MASS, MASSPROF, CombineMASSandDIMM
@@ -372,25 +373,36 @@ class telemetryKeck:
         self.dm.com = trsData.A['DMCOMMAND'][0]*self.dm.volt2meter
         self.dm.nCom= self.dm.com.shape[1]
 
-        #2.4. Get tip-tilt measurements and conversion into OPD
+        #2.4. STRAP centroid angles -> RMS Zernike tilt OPD coefficients.
+        # Z2/Z3 = 2*rho*cos/sin(phi) implies a = D*theta/4.
+        # Keck STRAP DTTCENTROIDS are calibrated angular offsets (arcsec);
+        # APD_IMAT has already been applied in the telemetry. Do not apply
+        # the old empirical 0.18 and 3.2 factors again.
         if 'b' in trsData:
-            self.tipTilt.tilt2meter= 3.2*1.268e-05 # to be verified
-            #self.tipTilt.tilt2meter= 1.268e-05 # to be verified
-            self.tipTilt.slopes = np.copy(trsData.B['DTTCENTROIDS'][0])
-            self.tipTilt.com = np.copy(trsData.B['DTTCOMMANDS'][0])
+            self.tipTilt.tilt2meter = zernike_tilt_opd_per_arcsec(self.tel.D)
+            self.tipTilt.slopes_arcsec = np.copy(trsData.B['DTTCENTROIDS'][0])
+            self.tipTilt.slopes = np.copy(self.tipTilt.slopes_arcsec)
+            self.tipTilt.com_raw = np.copy(trsData.B['DTTCOMMANDS'][0])
+            self.tipTilt.com = np.copy(self.tipTilt.com_raw)
             self.tipTilt.intensity = np.copy(trsData.B['APDCOUNTS'][0])
-            unit_tt = 0.18
+            # The command scaling is assumed arcsec for now, as in the
+            # historical implementation. Verify its native unit against the
+            # Keck RTC command telemetry before using command covariances.
+            self.tipTilt.command_units_verified = False
         else:
-            unit_tt = 1
-            self.tipTilt.tilt2meter = (np.pi/3600/180)*self.tel.D#12.68e-6 # should be np.pi*tel.D/4/3600/180
-            self.tipTilt.slopes = np.copy(trsData.A['RESIDUALWAVEFRONT'][0][:,self.dm.nCom:self.dm.nCom+2])# %angle in arcsec
-            #self.tipTilt.slopes[:, 1] = -self.tipTilt.slopes[:, 1]
+            # Preserve historical NGS conversion until NGS telemetry units
+            # have been independently verified (outside this LGS-only fix).
+            self.tipTilt.tilt2meter = self.tel.D * np.pi/(180*3600)
+            self.tipTilt.slopes = np.copy(
+                trsData.A['RESIDUALWAVEFRONT'][0][:,self.dm.nCom:self.dm.nCom+2]
+            )  # historical NGS path: assumed arcsec, not validated here
             self.tipTilt.com = np.copy(trsData.A['TTCOMMANDS'][0])
-            self.tipTilt.intensity  = None
+            self.tipTilt.intensity = None
+            self.tipTilt.command_units_verified = False
 
-        self.tipTilt.slopes = unit_tt * self.tipTilt.tilt2meter*self.tipTilt.slopes
+        self.tipTilt.slopes = self.tipTilt.tilt2meter * self.tipTilt.slopes
         self.tipTilt.slopes -= np.mean(self.tipTilt.slopes, axis=0)
-        self.tipTilt.com = self.tipTilt.tilt2meter*self.tipTilt.com
+        self.tipTilt.com = self.tipTilt.tilt2meter * self.tipTilt.com
         self.tipTilt.com -= np.mean(self.tipTilt.com, axis=0)
         self.tipTilt.nExp = self.tipTilt.slopes.shape[0]
 
