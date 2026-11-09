@@ -23,6 +23,7 @@ from p3.aoSystem.tipTiltGeometry import (
     project_covariance_to_psd,
     angular_jitter_structure_function,
 )
+from p3.telemetry.ttClosedLoop import physical_tt_covariance_from_telemetry
 
 #%%
 rad2mas = 3600 * 180 * 1000 / np.pi
@@ -56,7 +57,8 @@ class psfR:
     """
     # INIT
     def __init__(self, trs, path_root='', nLayer=None, theta_ext=0,
-                 compute_dphi_jitter=True):
+                 compute_dphi_jitter=True, tt_covariance_mode='legacy_psfr',
+                 tt_mirror_model='unity', tt_welch_nperseg=512):
         """
         Instantiating the psf-reconstruction model from a telemetry object
         """
@@ -71,6 +73,15 @@ class psfR:
         self.trs = trs
         self.theta_ext = theta_ext
         self.compute_dphi_jitter = compute_dphi_jitter
+        if tt_covariance_mode not in ('legacy_psfr', 'spectral_closed_loop'):
+            raise ValueError("Unknown TT covariance mode: " + str(tt_covariance_mode))
+        if tt_mirror_model not in ('unity', 'ragland_2016_keck_ii'):
+            raise ValueError("Unknown TT mirror model: " + str(tt_mirror_model))
+        if not isinstance(tt_welch_nperseg, (int, np.integer)) or tt_welch_nperseg < 128:
+            raise ValueError("TT Welch segment length must be integer >= 128")
+        self.tt_covariance_mode = tt_covariance_mode
+        self.tt_mirror_model = tt_mirror_model
+        self.tt_welch_nperseg = int(tt_welch_nperseg)
         self.ao = aoSystem(self.path_ini, path_root=path_root)
 
         # defining the number of model parameters
@@ -245,45 +256,58 @@ class psfR:
             s = self.trs.tipTilt.slopes
             self.Ctt = np.dot(s.T, s)/self.trs.tipTilt.nExp
             noise_raw = np.asarray(self.trs.tipTilt.Cn_tt, dtype=float)
-            noise_cov, noise_eigenvalues = project_covariance_to_psd(
-                noise_raw, label="STRAP noise covariance"
-            )
-            pn = float(self.trs.ttloop.tf.pn)
-            if not np.isfinite(pn) or pn < 0:
-                raise ValueError("Invalid tip-tilt noise transfer factor")
-
-            # Atmospheric residual and servo-propagated detector noise.
-            # Measured residuals contain instantaneous readout noise, while
-            # servo feedback transmits an additional pn*Cn contribution.
-            # This decomposition uses the historical P3 estimator unchanged.
-            atmospheric_raw = self.Ctt - (1.0 + pn) * noise_cov
-            self.tt_atmos_cov, atmospheric_eigs = project_covariance_to_psd(
-                atmospheric_raw, label="TT atmospheric residual covariance"
-            )
-            self.tt_noise_cov, _ = project_covariance_to_psd(
-                pn * noise_cov, label="TT propagated noise covariance"
-            )
-            # A covariance must be PSD to represent a Gaussian PSF blur.
-            # Projection provides a usable physical kernel, but may be biased
-            # low when the detector noise is overestimated.
-            self.tt_model_cov = self.tt_atmos_cov + self.tt_noise_cov
-            self.tiptilt_diagnostics = {
-                "raw_trace_m2": float(np.trace(self.Ctt)),
-                "noise_trace_m2": float(np.trace(noise_raw)),
-                "noise_transfer_factor": pn,
-                "corrected_trace_m2": float(np.trace(atmospheric_raw)),
-                "corrected_eigenvalues_m2": atmospheric_eigs.tolist(),
-                "noise_eigenvalues_m2": noise_eigenvalues.tolist(),
-                "atmospheric_projected_trace_m2": float(np.trace(self.tt_atmos_cov)),
-                "noise_propagated_trace_m2": float(np.trace(self.tt_noise_cov)),
-                "model_jitter_trace_m2": float(np.trace(self.tt_model_cov)),
-                "negative_variance_projected": bool(np.any(atmospheric_eigs < 0)),
-                "noise_model_validated": False,
-                "command_units_verified": bool(
-                    getattr(self.trs.tipTilt, "command_units_verified", False)
-                ),
-            }
-            Ctt = self.tt_model_cov
+            if self.tt_covariance_mode == 'spectral_closed_loop':
+                if self.trs.aoMode != 'LGS':
+                    raise ValueError(
+                        "Spectral closed-loop jitter currently requires Keck LGS STRAP"
+                    )
+                self.tt_atmos_cov, self.tt_noise_cov, self.tt_model_cov, spectral = (
+                    physical_tt_covariance_from_telemetry(
+                        s, noise_raw, self.trs.ttloop,
+                        mirror_model=self.tt_mirror_model,
+                        nperseg=self.tt_welch_nperseg,
+                    )
+                )
+                # Explicitly distinguish physical jitter from centroid noise.
+                # No covariance clipping; component validity is checked upstream.
+                self.tiptilt_diagnostics = {
+                    'jitter_covariance_method': 'spectral_closed_loop',
+                    'tt_mirror_model': self.tt_mirror_model,
+                    'mirror_model_verified_for_2020': False,
+                    'raw_trace_m2': float(np.trace(self.Ctt)),
+                    'noise_trace_m2': float(np.trace(noise_raw)),
+                    'noise_transfer_factor': float(self.trs.ttloop.tf.pn),
+                    'corrected_trace_m2': float(np.trace(self.tt_atmos_cov)),
+                    'corrected_eigenvalues_m2': np.linalg.eigvalsh(
+                        self.tt_atmos_cov
+                    ).tolist(),
+                    'atmospheric_projected_trace_m2': float(
+                        np.trace(self.tt_atmos_cov)
+                    ),
+                    'noise_propagated_trace_m2': float(
+                        np.trace(self.tt_noise_cov)
+                    ),
+                    'model_jitter_trace_m2': float(
+                        np.trace(self.tt_model_cov)
+                    ),
+                    'negative_variance_projected': False,
+                    'noise_model_validated': False,
+                    'command_units_verified': bool(
+                        getattr(self.trs.tipTilt, 'command_units_verified', False)
+                    ),
+                    'gain_sensor_to_measured_noise':
+                        spectral['gain_sensor_to_measured_noise'],
+                    'gain_sensor_to_physical_noise':
+                        spectral['gain_sensor_to_physical_noise'],
+                    'physical_atmos_min_eig_m2':
+                        spectral['physical_atmos_min_eig_m2'],
+                    'physical_total_min_eig_m2':
+                        spectral['physical_total_min_eig_m2'],
+                    'spectral_covariance_audit': spectral,
+                }
+                Ctt = self.tt_model_cov
+            else:
+                Ctt = self._legacy_tiptilt_covariance(noise_raw)
         else:
             Ctt, _ = project_covariance_to_psd(
                 Ctt, label="Explicit TT kernel covariance"
@@ -302,6 +326,52 @@ class psfR:
         return angular_jitter_structure_function(
             Ctheta, self.ao.tel.D, self.freq.wvlRef, Ur, Vr
         )
+
+    def _legacy_tiptilt_covariance(self, noise_raw):
+        """Preserve original PR #2 behaviour for reproducible comparisons."""
+        noise_cov, noise_eigenvalues = project_covariance_to_psd(
+            noise_raw, label="STRAP noise covariance"
+        )
+        pn = float(self.trs.ttloop.tf.pn)
+        if not np.isfinite(pn) or pn < 0:
+            raise ValueError("Invalid tip-tilt noise transfer factor")
+
+        # Atmospheric residual and servo-propagated detector noise.
+        # Measured residuals contain instantaneous readout noise, while
+        # servo feedback transmits an additional pn*Cn contribution.
+        # This decomposition uses the historical P3 estimator unchanged.
+        atmospheric_raw = self.Ctt - (1.0 + pn) * noise_cov
+        self.tt_atmos_cov, atmospheric_eigs = project_covariance_to_psd(
+            atmospheric_raw, label="TT atmospheric residual covariance"
+        )
+        self.tt_noise_cov, _ = project_covariance_to_psd(
+            pn * noise_cov, label="TT propagated noise covariance"
+        )
+        # A covariance must be PSD to represent a Gaussian PSF blur.
+        # Projection provides a usable physical kernel, but may be biased
+        # low when the detector noise is overestimated.
+        self.tt_model_cov = self.tt_atmos_cov + self.tt_noise_cov
+        self.tiptilt_diagnostics = {
+            "raw_trace_m2": float(np.trace(self.Ctt)),
+            "noise_trace_m2": float(np.trace(noise_raw)),
+            "noise_transfer_factor": pn,
+            "corrected_trace_m2": float(np.trace(atmospheric_raw)),
+            "corrected_eigenvalues_m2": atmospheric_eigs.tolist(),
+            "noise_eigenvalues_m2": noise_eigenvalues.tolist(),
+            "atmospheric_projected_trace_m2": float(np.trace(self.tt_atmos_cov)),
+            "noise_propagated_trace_m2": float(np.trace(self.tt_noise_cov)),
+            "model_jitter_trace_m2": float(np.trace(self.tt_model_cov)),
+            "negative_variance_projected": bool(np.any(atmospheric_eigs < 0)),
+            "noise_model_validated": False,
+            "command_units_verified": bool(
+                getattr(self.trs.tipTilt, "command_units_verified", False)
+            ),
+        }
+        Ctt = self.tt_model_cov
+
+        self.tiptilt_diagnostics['jitter_covariance_method'] = 'legacy_psfr'
+        self.tiptilt_diagnostics['tt_mirror_model'] = 'unity'
+        return self.tt_model_cov
 
     def pixel_optical_transfer_function(self):
         """
