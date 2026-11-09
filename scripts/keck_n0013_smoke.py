@@ -301,6 +301,31 @@ def main():
         tt_welch_nperseg=tt_jitter_nperseg,
     ))
 
+    # Record the noise-subtracted high-order covariance that actually fed
+    # modes2Otf. This is an internal model diagnostic, not a fit to NIRC2.
+    ho_cov = (2*np.pi/model.freq.wvlRef)**2 * (
+        np.asarray(model.Cao, dtype=float)
+        - np.asarray(model.trs.wfs.Cn_ao, dtype=float)
+    )
+    ho_cov = 0.5 * (ho_cov + ho_cov.T)
+    ho_eig = np.linalg.eigvalsh(ho_cov)
+    ho_tolerance = max(1e-12 * float(np.max(np.abs(ho_eig))), 1e-24)
+    ho_diagnostics = {
+        "source": "noise-subtracted HO actuator covariance used by modes2Otf",
+        "units": "rad2",
+        "lambda_min": float(ho_eig.min()),
+        "lambda_max": float(ho_eig.max()),
+        "negative_eigenvalue_count": int(np.count_nonzero(ho_eig < -ho_tolerance)),
+        "negative_tolerance": ho_tolerance,
+        "trace": float(np.trace(ho_cov)),
+        "positive_semidefinite_within_tolerance":
+            bool(np.all(ho_eig >= -ho_tolerance)),
+    }
+    (args.output / "ho_covariance_diagnostics.json").write_text(
+        json.dumps(ho_diagnostics, indent=2), encoding="utf-8"
+    )
+    print("[HO covariance]", ho_diagnostics, flush=True)
+
     # [r0, gho, gtt] keeps P3's default K-band throughput at all three
     # wavelength bins. Passing [r0, 1, 1, 1, 0, 0, 0, ...] instead assigns
     # the stellar flux to the first bin only.
