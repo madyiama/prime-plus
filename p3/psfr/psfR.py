@@ -321,9 +321,22 @@ class psfR:
            + x0_dphi[1]*self.dphi_tt \
            + r0**(-5/3) * (self.dphi_fit + self.dphi_alias)
 
-        # Anisoplanatism phase structure function
-        if self.freq.isAniso and Cn2 is not None and (len(Cn2) == self.freq.dani_ang.shape[1]):
-            self.dani = (self.dphi_ani.transpose(2,3,1,0) * Cn2[:,np.newaxis]).sum(axis=2)
+        # Anisoplanatism is present for an LGS even with one equivalent
+        # atmospheric layer. In that case the fitted parameter is r0, not Cn2.
+        # P3's anisoplanatic kernels are normalized by r0^(-5/3) at atm.wvl,
+        # so convert their phase variance to the science reference wavelength.
+        if self.freq.isAniso:
+            if Cn2 is None:
+                Cn2 = np.asarray(self.ao.atm.weights) * r0**(-5/3)
+            Cn2 = np.asarray(Cn2, dtype=float).reshape(-1)
+            if Cn2.size != self.ao.atm.nL:
+                raise ValueError("Anisoplanatism: Cn2 must have one value per layer")
+            Cn2_at_science_wvl = Cn2 * (
+                self.ao.atm.wvl / self.freq.wvlRef
+            )**2
+            self.dani = np.einsum(
+                'slxy,l->xys', self.dphi_ani, Cn2_at_science_wvl
+            )
             SF = SF[:,:,np.newaxis] + self.dani
         else:
             SF = np.repeat(SF[:,:,np.newaxis],self.ao.src.nSrc,axis=2)
