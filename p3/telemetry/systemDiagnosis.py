@@ -14,6 +14,7 @@ import p3.aoSystem.FourierUtils as FourierUtils
 from p3.aoSystem.zernike import zernike
 from scipy.optimize import least_squares
 from p3.psfFitting.confidenceInterval import confidence_interval
+from p3.telemetry.ttNoise import estimate_tt_noise, TT_METHODS
 
 #
 # TO DO :
@@ -30,7 +31,9 @@ arc2rad = 1/rad2arc
 class systemDiagnosis:
 
     def __init__(self, trs, noiseMethod='autocorrelation', nshift=1, nfit=2,
-                 noise=1, quantile=0.95, nWin=10, nZer=None, j0=4, Dout=None, Din=None):
+                 noise=1, quantile=0.95, nWin=10, nZer=None, j0=4, Dout=None, Din=None,
+                 tt_noise_method='van_dam', tt_noise_high_band=(0.65, 0.95),
+                 tt_noise_nperseg=512):
 
         self.trs = trs
 
@@ -42,7 +45,14 @@ class systemDiagnosis:
         if hasattr(self.trs.wfs,'intensity') or hasattr(self.trs.tipTilt,'intensity'):
             self.trs.wfs.nph,self.trs.wfs.ron,self.trs.tipTilt.nph,self.trs.tipTilt.ron = self.get_number_photons()
 
-        self.trs.wfs.Cn_ao,self.trs.tipTilt.Cn_tt = self.get_noise_variance(noiseMethod=self.noiseMethod,nshift=nshift,nfit=nfit)
+        self.tt_noise_method = tt_noise_method
+        self.tt_noise_high_band = tuple(tt_noise_high_band)
+        self.tt_noise_nperseg = int(tt_noise_nperseg)
+        self.trs.wfs.Cn_ao,self.trs.tipTilt.Cn_tt = self.get_noise_variance(
+            noiseMethod=self.noiseMethod, nshift=nshift, nfit=nfit,
+            tt_noise_method=tt_noise_method, tt_noise_high_band=tt_noise_high_band,
+            tt_noise_nperseg=tt_noise_nperseg,
+        )
 
         if np.any(self.trs.wfs.Cn_ao):
             Cnn = np.diag(self.trs.wfs.Cn_ao)
@@ -159,7 +169,9 @@ class systemDiagnosis:
 
         return nph, ron, nph_tt, ron_tt
 
-    def get_noise_variance(self, noiseMethod='autocorrelation', nshift=1, nfit=2):
+    def get_noise_variance(self, noiseMethod='autocorrelation', nshift=1, nfit=2,
+                           tt_noise_method='van_dam', tt_noise_high_band=(0.65, 0.95),
+                           tt_noise_nperseg=512):
         """
             ESTIMATE THE WFS NOISE VARIANCE
         """
@@ -217,8 +229,32 @@ class systemDiagnosis:
         else:
             rtf  = self.trs.holoop.tf.ctf/self.trs.holoop.tf.wfs
             Cn_ao = slopes_to_noise(self.trs.dm.com,noiseMethod=noiseMethod,nshift=nshift,nfit=nfit,rtf=rtf)
-            rtf  = self.trs.ttloop.tf.ctf/self.trs.ttloop.tf.wfs
-            Cn_tt = slopes_to_noise(self.trs.tipTilt.slopes,noiseMethod=noiseMethod,nshift=nshift,nfit=nfit,rtf=rtf)
+            if self.trs.aoMode == 'LGS':
+                if tt_noise_method not in TT_METHODS:
+                    raise ValueError(
+                        f"Unknown TT noise method {tt_noise_method!r}: {TT_METHODS}"
+                    )
+                Cn_tt, diag = estimate_tt_noise(
+                    self.trs.tipTilt.slopes, method=tt_noise_method,
+                    sample_rate_hz=self.trs.ttloop.freq,
+                    rejection_frequency_hz=self.trs.ttloop.tf.freq,
+                    rejection_transfer=self.trs.ttloop.tf.rtf,
+                    high_frequency_band=tt_noise_high_band,
+                    nperseg=tt_noise_nperseg,
+                )
+                self.trs.tipTilt.noise_estimation_method = tt_noise_method
+                self.trs.tipTilt.noise_estimation_diagnostics = diag
+            else:
+                # Preserve the historical NGS path; STRAP van Dam is LGS-only.
+                rtf = self.trs.ttloop.tf.ctf/self.trs.ttloop.tf.wfs
+                Cn_tt = slopes_to_noise(
+                    self.trs.tipTilt.slopes, noiseMethod=noiseMethod,
+                    nshift=nshift, nfit=nfit, rtf=rtf
+                )
+                self.trs.tipTilt.noise_estimation_method = noiseMethod
+                self.trs.tipTilt.noise_estimation_diagnostics = {
+                    'method': noiseMethod, 'noise_model_validated': False
+                }
 
 
         return Cn_ao, Cn_tt
