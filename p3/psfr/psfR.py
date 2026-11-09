@@ -268,15 +268,37 @@ class psfR:
                         nperseg=self.tt_welch_nperseg,
                     )
                 )
+                # Important caveat: systemDiagnosis fits van Dam noise using
+                # P3's original tip-tilt rejection transfer (pure-delay plant).
+                # Propagating that same Cn through Ragland's different plant
+                # is a sensitivity experiment, NOT a self-consistent joint fit.
+                noise_method = getattr(
+                    self.trs.tipTilt, 'noise_estimation_method', 'unknown'
+                )
+                noise_transfer_mismatch = (
+                    noise_method == 'van_dam'
+                    and self.tt_mirror_model != 'unity'
+                )
+                if noise_transfer_mismatch:
+                    warnings.warn(
+                        "van Dam sensor-noise Cn was estimated with P3's "
+                        "pure-delay rejection transfer, but TT jitter now "
+                        "uses the Ragland actuator. This is a sensitivity "
+                        "study only: refit van Dam noise with the same W/K/P "
+                        "loop transfer before physical validation.",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
                 # Explicitly distinguish physical jitter from centroid noise.
                 # No covariance clipping; component validity is checked upstream.
                 self.tiptilt_diagnostics = {
                     'jitter_covariance_method': 'spectral_closed_loop',
                     'tt_mirror_model': self.tt_mirror_model,
                     'mirror_model_verified_for_2020': False,
-                    'measurement_noise_estimator': getattr(
-                        self.trs.tipTilt, 'noise_estimation_method', 'unknown'
-                    ),
+                    'measurement_noise_estimator': noise_method,
+                    'van_dam_rejection_model': 'p3_pure_delay' if
+                        noise_method == 'van_dam' else None,
+                    'noise_transfer_mismatch': noise_transfer_mismatch,
                     'tt_welch_nperseg': self.tt_welch_nperseg,
                     'raw_trace_m2': float(np.trace(self.Ctt)),
                     'noise_trace_m2': float(np.trace(noise_raw)),
