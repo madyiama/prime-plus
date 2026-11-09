@@ -18,6 +18,11 @@ from p3.aoSystem.fourierModel import fourierModel
 import p3.aoSystem.FourierUtils as FourierUtils
 import p3.psfr.psfrUtils as psfrUtils
 from p3.aoSystem.frequencyDomain import frequencyDomain as frequencyDomain
+from p3.aoSystem.tipTiltGeometry import (
+    opd_covariance_to_angular,
+    project_covariance_to_psd,
+    angular_jitter_structure_function,
+)
 
 #%%
 rad2mas = 3600 * 180 * 1000 / np.pi
@@ -230,21 +235,61 @@ class psfR:
         return dphi_ao
 
     def jitter_phase_structure_function(self, Ctt=None):
+        """Compute the Gaussian image-motion structure function from angular jitter.
+
+        Internal covariance inputs are RMS-normalized Zernike tilt OPD [m^2].
+        Only the final OTF kernel is expressed in angle [rad^2]. Retain the
+        current noise estimator, but make its non-PSD decomposition explicit.
         """
-        Computes the phase structure function of the residual jitter.
-        """
-        # computing the empirical covariance matrix
         if Ctt is None:
             s = self.trs.tipTilt.slopes
             self.Ctt = np.dot(s.T, s)/self.trs.tipTilt.nExp
-            Ctt = self.Ctt - self.trs.tipTilt.Cn_tt
+            noise_raw = np.asarray(self.trs.tipTilt.Cn_tt, dtype=float)
+            noise_cov, noise_eigenvalues = project_covariance_to_psd(
+                noise_raw, label="STRAP noise covariance"
+            )
+            pn = float(self.trs.ttloop.tf.pn)
+            if not np.isfinite(pn) or pn < 0:
+                raise ValueError("Invalid tip-tilt noise transfer factor")
 
-        # computing the coefficients of the Gaussian Kernel in rad^2
-        Guu = (2*np.pi/self.freq.wvlRef)**2 * Ctt
+            # Atmospheric residual and servo-propagated detector noise.
+            # Measured residuals contain instantaneous readout noise, while
+            # servo feedback transmits an additional pn*Cn contribution.
+            # This decomposition uses the historical P3 estimator unchanged.
+            atmospheric_raw = self.Ctt - (1.0 + pn) * noise_cov
+            self.tt_atmos_cov, atmospheric_eigs = project_covariance_to_psd(
+                atmospheric_raw, label="TT atmospheric residual covariance"
+            )
+            self.tt_noise_cov, _ = project_covariance_to_psd(
+                pn * noise_cov, label="TT propagated noise covariance"
+            )
+            # A covariance must be PSD to represent a Gaussian PSF blur.
+            # Projection provides a usable physical kernel, but may be biased
+            # low when the detector noise is overestimated.
+            self.tt_model_cov = self.tt_atmos_cov + self.tt_noise_cov
+            self.tiptilt_diagnostics = {
+                "raw_trace_m2": float(np.trace(self.Ctt)),
+                "noise_trace_m2": float(np.trace(noise_raw)),
+                "noise_transfer_factor": pn,
+                "corrected_trace_m2": float(np.trace(atmospheric_raw)),
+                "corrected_eigenvalues_m2": atmospheric_eigs.tolist(),
+                "noise_eigenvalues_m2": noise_eigenvalues.tolist(),
+                "atmospheric_projected_trace_m2": float(np.trace(self.tt_atmos_cov)),
+                "noise_propagated_trace_m2": float(np.trace(self.tt_noise_cov)),
+                "model_jitter_trace_m2": float(np.trace(self.tt_model_cov)),
+                "negative_variance_projected": bool(np.any(atmospheric_eigs < 0)),
+                "noise_model_validated": False,
+                "command_units_verified": bool(
+                    getattr(self.trs.tipTilt, "command_units_verified", False)
+                ),
+            }
+            Ctt = self.tt_model_cov
+        else:
+            Ctt, _ = project_covariance_to_psd(
+                Ctt, label="Explicit TT kernel covariance"
+            )
 
-        # freq.U_ ranges within [-1,1];
-        # at Nyquist, angular frequencies range within [-D/lambda, D/lambda]
-        # rotating the axes
+        Ctheta = opd_covariance_to_angular(Ctt, self.ao.tel.D)
         ang = self.trs.tel.pupilAngle * np.pi/180
         unit = self.freq.sampRef/2
         if ang:
@@ -254,10 +299,9 @@ class psfR:
             Ur = unit * self.freq.U_
             Vr = unit * self.freq.V_
 
-        # computing the Gaussian-Kernel
-        dphi_tt = Guu[0,0]*Ur**2 + Guu[1,1]*Vr**2 + 2*Guu[1,0]*Ur*Vr
-
-        return dphi_tt
+        return angular_jitter_structure_function(
+            Ctheta, self.ao.tel.D, self.freq.wvlRef, Ur, Vr
+        )
 
     def pixel_optical_transfer_function(self):
         """
@@ -343,7 +387,14 @@ class psfR:
         msk = self.trs.dm.validActuators.reshape(-1)
         self.wfe['HO NOISE'] = 1e9 * np.sqrt(self.trs.holoop.tf.pn * np.mean(self.trs.wfs.Cn_ao[msk,msk]))
         # noise on tip-tilt modes
-        dphi_tt_n = self.jitter_phase_structure_function(Ctt=self.trs.ttloop.tf.pn*self.trs.tipTilt.Cn_tt)
+        if self.compute_dphi_jitter:
+            noise_cov = self.tt_noise_cov
+        else:
+            noise_cov, _ = project_covariance_to_psd(
+                self.trs.ttloop.tf.pn * self.trs.tipTilt.Cn_tt,
+                label="TT propagated noise covariance",
+            )
+        dphi_tt_n = self.jitter_phase_structure_function(Ctt=noise_cov)
         sr_tt_n = np.sum(otf_dl * np.exp(-0.5*dphi_tt_n))/S
         self.wfe['TT NOISE'] = sr2fwe(sr_tt_n)
 
@@ -351,30 +402,19 @@ class psfR:
         C = self.Cao - (1+self.trs.holoop.tf.pn)*self.trs.wfs.Cn_ao
         self.wfe['SERVO-LAG'] = 1e9*np.sqrt(C.trace()/self.trs.dm.nCom)
 
-        #6. RESIDUAL TIP-TILT
+        #6. RESIDUAL TIP-TILT (after the same PSD projection as in the OTF).
         if self.compute_dphi_jitter:
-            C = self.Ctt - (1+self.trs.ttloop.tf.pn)*self.trs.tipTilt.Cn_tt
-            self.tiptilt_diagnostics = {
-                'raw_trace_m2': float(np.trace(self.Ctt)),
-                'noise_trace_m2': float(np.trace(self.trs.tipTilt.Cn_tt)),
-                'noise_transfer_factor': float(self.trs.ttloop.tf.pn),
-                'corrected_trace_m2': float(np.trace(C)),
-                'corrected_eigenvalues_m2': np.linalg.eigvalsh(
-                    (C + C.T)/2
-                ).tolist(),
-            }
-            sr_tt = np.sum(otf_dl * np.exp(-0.5*self.dphi_tt))/S
-            self.wfe['TIP-TILT'] = _sqrt_checked_variance(
-                sr2fwe(sr_tt)**2 - self.wfe['TT NOISE']**2,
-                'TIP-TILT noise-corrected equivalent WFE',
+            dphi_tt_atmos = self.jitter_phase_structure_function(
+                Ctt=self.tt_atmos_cov
+            )
+            sr_tt = np.sum(otf_dl * np.exp(-0.5*dphi_tt_atmos))/S
+            self.wfe['TIP-TILT'] = sr2fwe(sr_tt)
+            self.wfe['TIP-TILT-WFE'] = (
+                np.sqrt(np.trace(self.tt_atmos_cov)/2) * 1e9
             )
         else:
-            F = self.trs.mat.DMTTRem
-            C = np.dot(F, np.dot(C, F.T))
             self.wfe['TIP-TILT'] = 0
-        self.wfe['TIP-TILT-WFE'] = 1e9 * _sqrt_checked_variance(
-            C.trace()/2, 'TIP-TILT covariance trace',
-        )
+            self.wfe['TIP-TILT-WFE'] = 0
 
         #7. PIXEL TF
         sr_pixel = np.sum(otf_dl * self.otfPixel)/S
