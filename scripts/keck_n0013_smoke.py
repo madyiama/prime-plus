@@ -420,6 +420,12 @@ def main():
         "tt_jitter_ablated_for_diagnostics": bool(args.disable_tt_jitter),
         "target": "LP415-20 (binary)",
         "psf_shape": list(psf.shape),
+        "psf_spectral_model": (
+            "Single reference-wavelength PSF shared across the three "
+            "science passband bins with different throughput weights; "
+            "not three independently propagated chromatic PSFs"
+        ),
+        "psf_reference_wavelength_m": float(model.freq.wvlRef),
         "note": "No astrometric registration or binary fit performed",
     }, indent=2), encoding="utf-8")
 
