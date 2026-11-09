@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import tomllib
 from pathlib import Path
 
 import numpy as np
@@ -65,31 +66,63 @@ def main():
     parser.add_argument("--output", type=Path,
                         default=Path("results/n0013_apd_calibration"))
     parser.add_argument(
+        "--config", type=Path,
+        default=Path(__file__).resolve().parents[1] /
+                "config/keck_tt_noise.toml",
+        help="TOML with strap_apd_reference hypotheses (overridden by flags)",
+    )
+    parser.add_argument(
         "--mirror-model", choices=("unity", "ragland_2016_keck_ii"),
         default="unity", help="Use the same physical W/K/P model for van Dam",
     )
     parser.add_argument(
-        "--photoelectrons-per-count", type=float, default=1.,
-        help="Externally calibrated photoelectron-equivalent gain; default 1 is hypothetical",
+        "--photoelectrons-per-count", type=float, default=None,
+        help="Photoelectron-equivalent gain; default from explicitly unverified TOML",
     )
     parser.add_argument(
-        "--apd-excess-noise-factor", type=float, default=1.,
-        help="Detector shot-noise excess factor; default 1 is ideal Poisson only",
+        "--apd-excess-noise-factor", type=float, default=None,
+        help="Detector shot-noise excess factor; default from unverified TOML",
     )
     parser.add_argument(
-        "--read-noise-variance-counts2", type=float, default=0.,
+        "--read-noise-variance-counts2", type=float, default=None,
         help="Detector read-noise variance in recorded count units squared",
     )
     parser.add_argument(
-        "--sky-estimation-variance-counts2", type=float, default=0.,
-        help="Uncertainty of the subtracted sky-background estimate in count units squared",
+        "--sky-estimation-variance-counts2", type=float, default=None,
+        help="Uncertainty of subtracted sky-background estimate in count units squared",
     )
-    parser.add_argument("--mc-trials", type=int, default=128)
-    parser.add_argument("--seed", type=int, default=2020)
+    parser.add_argument("--mc-trials", type=int, default=None)
+    parser.add_argument("--seed", type=int, default=None)
     args = parser.parse_args()
-    for path in (args.sav, args.fits, args.calib):
+    for path in (args.sav, args.fits, args.calib, args.config):
         if not path.exists():
-            parser.error("Missing Keck file or calibration directory: " + str(path))
+            parser.error("Missing Keck file or configuration: " + str(path))
+    with args.config.open("rb") as handle:
+        apd_config = tomllib.load(handle).get("strap_apd_reference", {})
+    if apd_config.get("calibration_status") != "unverified_hypothesis":
+        parser.error(
+            "Expected strap_apd_reference.calibration_status="
+            "'unverified_hypothesis'; independent calibration requires "
+            "a separately validated instrument profile."
+        )
+    if args.photoelectrons_per_count is None:
+        args.photoelectrons_per_count = apd_config.get(
+            "effective_photoelectrons_per_count", 1.0
+        )
+    if args.apd_excess_noise_factor is None:
+        args.apd_excess_noise_factor = apd_config.get("excess_noise_factor", 1.0)
+    if args.read_noise_variance_counts2 is None:
+        args.read_noise_variance_counts2 = apd_config.get(
+            "read_noise_variance_counts2", 0.0
+        )
+    if args.sky_estimation_variance_counts2 is None:
+        args.sky_estimation_variance_counts2 = apd_config.get(
+            "sky_estimation_variance_counts2", 0.0
+        )
+    if args.mc_trials is None:
+        args.mc_trials = apd_config.get("monte_carlo_trials", 128)
+    if args.seed is None:
+        args.seed = apd_config.get("monte_carlo_seed", 2020)
     args.output.mkdir(parents=True, exist_ok=True)
 
     from p3.telemetry.telemetryKeck import telemetryKeck
@@ -176,6 +209,8 @@ def main():
     result = {
         "dataset": "Keck II NIRC2 2020-12-02 n0013 LGS",
         "tt_mirror_model": args.mirror_model,
+        "apd_config_path": str(args.config.resolve()),
+        "apd_calibration_status": apd_config["calibration_status"],
         "noise_rejection_mirror_model":
             sd.trs.tipTilt.noise_rejection_mirror_model,
         "rejection_gain_sensor_to_measured_residual":
