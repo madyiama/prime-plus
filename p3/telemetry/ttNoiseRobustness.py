@@ -149,7 +149,7 @@ def run_robustness_benchmark(
         rejection_transfer,
     )
     if not np.isfinite(noise_transfer_factor) or noise_transfer_factor < 0:
-        raise ValueError("Invalid tip-tilt noise transfer factor")
+        raise ValueError("Tip-tilt noise transfer factor must be finite and non-negative")
     bands = tuple(tuple(float(v) for v in band) for band in bands)
     welch_segments = tuple(sorted(set(int(v) for v in welch_segments)))
     partitions = tuple(sorted(set(int(v) for v in partitions)))
