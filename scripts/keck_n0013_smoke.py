@@ -301,6 +301,58 @@ def main():
         tt_welch_nperseg=tt_jitter_nperseg,
     ))
 
+    # Reference-wavelength / Fourier-grid / angular-centroid audit.
+    # The physical image-motion covariance must be independent of lambda;
+    # only the OTF sampling and diffraction kernel depend on wavelength.
+    rad2mas = 180 * 3600 * 1000 / np.pi
+    diameter = float(model.ao.tel.D)
+    ref_wavelength = float(model.freq.wvlRef)
+    pupil_sample = float(model.freq.sampRef)
+    k_ref = int(model.freq.kRef_)
+    declared_pixel_mas = float(np.asarray(model.ao.cam.psInMas).reshape(-1)[0])
+    implied_pixel_mas = (
+        ref_wavelength * rad2mas * k_ref / (diameter * pupil_sample)
+    )
+    expected_psd_step = 1.0 / (diameter * pupil_sample)
+    original_tilt_gain = float(sd.trs.tipTilt.tilt2meter)
+    expected_tilt_gain = diameter * np.pi / (180 * 3600) / 4
+    slope_measured = np.asarray(sd.trs.tipTilt.slopes, dtype=float)
+    slope_covariance = slope_measured.T @ slope_measured / len(slope_measured)
+    spatial_diagnostics = {
+        "reference_wavelength_m": ref_wavelength,
+        "science_wavelength_bins_m": np.asarray(model.freq.wvl_, dtype=float).tolist(),
+        "input_atmosphere_wavelength_m": float(sd.trs.atm.wvl),
+        "rescaled_atmosphere_wavelength_m": float(model.ao.atm.wvl),
+        "rescaled_r0_m": float(model.ao.atm.r0),
+        "telescope_diameter_m": diameter,
+        "otf_grid_size": int(model.freq.nOtf),
+        "camera_pixels": int(model.ao.cam.fovInPix),
+        "otf_sampling_sampRef": pupil_sample,
+        "integer_oversampling_kRef": k_ref,
+        "pixel_scale_declared_mas_per_pixel": declared_pixel_mas,
+        "pixel_scale_implied_mas_per_pixel": implied_pixel_mas,
+        "pixel_scale_relative_error": implied_pixel_mas / declared_pixel_mas - 1.0,
+        "psd_frequency_step_inv_m": float(model.freq.PSDstep),
+        "psd_frequency_step_expected_inv_m": expected_psd_step,
+        "dm_cutoff_max_inv_m": float(model.freq.kcMax_),
+        "straptiptilt_opd_gain_m_per_arcsec": original_tilt_gain,
+        "noll_tilt_opd_gain_expected_m_per_arcsec": expected_tilt_gain,
+        "straptiptilt_raw_measured_covariance_trace_m2": float(
+            np.trace(slope_covariance)
+        ),
+        "straptiptilt_raw_rms_per_axis_mas": float(
+            1000 * np.sqrt(np.trace(slope_covariance) / 2) / expected_tilt_gain
+        ),
+        "tt_wavelength_model": (
+            "Angular covariance independent of wavelength; "
+            "Gaussian OTF phase uses reference wavelength and pupil frequency"
+        ),
+    }
+    (args.output / "frequency_grid_diagnostics.json").write_text(
+        json.dumps(spatial_diagnostics, indent=2), encoding="utf-8"
+    )
+    print("[Frequency/units]", spatial_diagnostics, flush=True)
+
     # Record the noise-subtracted high-order covariance that actually fed
     # modes2Otf. This is an internal model diagnostic, not a fit to NIRC2.
     ho_cov = (2*np.pi/model.freq.wvlRef)**2 * (
