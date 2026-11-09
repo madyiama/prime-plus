@@ -156,3 +156,37 @@ def test_lgs_anisokinetism_cross_covariance_uses_xy_not_transposes(monkeypatch):
                 + 2 * covariance[0, 1] * x*y
                 + covariance[1, 1] * y**2)
     np.testing.assert_allclose(result[0, 0], expected, atol=1e-12)
+
+
+def test_atmosphere_reference_wavelength_change_preserves_all_layer_r0_scales():
+    """The live PSF-R setter cannot leave individual layers at 500 nm."""
+    from p3.aoSystem.atmosphere import atmosphere
+
+    lambda_atm = 500e-9
+    lambda_sci = 2.055501e-6
+    original_r0 = 0.16
+    atm = atmosphere(
+        lambda_atm, original_r0,
+        weights=[0.35, 0.65], heights=[0.0, 6000.0],
+        wSpeed=[10., 20.], wDir=[0., 45.], L0=25.,
+    )
+    original_layers = np.array([atm.slab(i).r0 for i in range(atm.nL)])
+    factor = (lambda_sci / lambda_atm)**(6/5)
+
+    atm.wvl = lambda_sci
+    np.testing.assert_allclose(atm.r0, original_r0 * factor, rtol=1e-14)
+    np.testing.assert_allclose(
+        [atm.slab(i).r0 for i in range(atm.nL)],
+        original_layers * factor, rtol=1e-14,
+    )
+    np.testing.assert_allclose(
+        sum(atm.slab(i).r0**(-5/3) for i in range(atm.nL)),
+        atm.r0**(-5/3), rtol=1e-14,
+    )
+
+    atm.wvl = lambda_atm
+    np.testing.assert_allclose(atm.r0, original_r0, rtol=1e-14)
+    np.testing.assert_allclose(
+        [atm.slab(i).r0 for i in range(atm.nL)],
+        original_layers, rtol=1e-14,
+    )
