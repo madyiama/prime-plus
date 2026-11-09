@@ -130,6 +130,21 @@ class configFile():
             parser.set('sensor_LO','NumberLenslets', str(sysdiag.trs.tipTilt.nSubap))
             parser.set('sensor_LO','SizeLenslets', str(sysdiag.trs.tipTilt.dsub))
             parser.set('sensor_LO','NoiseVariance', str(sysdiag.trs.tipTilt.noiseVar))
+            # Method used in systemDiagnosis BEFORE this INI is written.
+            # Preserve it in the generated configuration for reproducibility.
+            parser.set('sensor_LO', 'NoiseEstimationMethod',
+                       str(getattr(sysdiag.trs.tipTilt, 'noise_estimation_method', 'unknown')))
+            if getattr(sysdiag.trs.tipTilt, 'noise_estimation_method', None) == 'van_dam':
+                diag = getattr(sysdiag.trs.tipTilt, 'noise_estimation_diagnostics', {})
+                parser.set('sensor_LO', 'NoisePSDHighFrequencyBand',
+                           str(diag.get('high_frequency_band_fraction_nyquist')))
+                parser.set('sensor_LO', 'NoisePSDWelchSegmentLength',
+                           str(diag.get('welch_nperseg')))
+            else:
+                # A previous run may have written van Dam-only options to
+                # this file. Remove stale metadata if another method is used.
+                parser.remove_option('sensor_LO', 'NoisePSDHighFrequencyBand')
+                parser.remove_option('sensor_LO', 'NoisePSDWelchSegmentLength')
             parser.set('sensor_LO','Algorithm', '\''+sysdiag.trs.tipTilt.algo+'\'')
             parser.set('sensor_LO','WindowRadiusWCoG', str(sysdiag.trs.tipTilt.win))
             parser.set('sensor_LO','ThresholdWCoG', str(sysdiag.trs.tipTilt.thres))

@@ -14,6 +14,7 @@ import p3.aoSystem.FourierUtils as FourierUtils
 from p3.aoSystem.zernike import zernike
 from scipy.optimize import least_squares
 from p3.psfFitting.confidenceInterval import confidence_interval
+from p3.telemetry.ttNoise import estimate_tt_noise, TT_METHODS
 
 #
 # TO DO :
@@ -27,10 +28,30 @@ rad2mas = 3600 * 180 * 1000 / np.pi
 rad2arc = rad2mas / 1000
 arc2rad = 1/rad2arc
 
+
+def _tt_sensor_integration_response(freq_hz, sample_rate_hz):
+    """Causal boxcar integration over one STRAP sample interval.
+
+    scipy/NumPy sinc(x) = sin(pi*x)/(pi*x).
+    """
+    normalized_frequency = np.asarray(freq_hz) / sample_rate_hz
+    return (np.sinc(normalized_frequency) *
+            np.exp(-1j * np.pi * normalized_frequency))
+
+
+def _tt_latency_response(freq_hz, sample_rate_hz, delay_frames):
+    """Phase delay exp(-i*2*pi*f*delay_seconds), delay in frames."""
+    return np.exp(
+        -2j * np.pi * np.asarray(freq_hz) * delay_frames / sample_rate_hz
+    )
+
+
 class systemDiagnosis:
 
     def __init__(self, trs, noiseMethod='autocorrelation', nshift=1, nfit=2,
-                 noise=1, quantile=0.95, nWin=10, nZer=None, j0=4, Dout=None, Din=None):
+                 noise=1, quantile=0.95, nWin=10, nZer=None, j0=4, Dout=None, Din=None,
+                 tt_noise_method='van_dam', tt_noise_high_band=(0.65, 0.95),
+                 tt_noise_nperseg=512):
 
         self.trs = trs
 
@@ -42,7 +63,14 @@ class systemDiagnosis:
         if hasattr(self.trs.wfs,'intensity') or hasattr(self.trs.tipTilt,'intensity'):
             self.trs.wfs.nph,self.trs.wfs.ron,self.trs.tipTilt.nph,self.trs.tipTilt.ron = self.get_number_photons()
 
-        self.trs.wfs.Cn_ao,self.trs.tipTilt.Cn_tt = self.get_noise_variance(noiseMethod=self.noiseMethod,nshift=nshift,nfit=nfit)
+        self.tt_noise_method = tt_noise_method
+        self.tt_noise_high_band = tuple(tt_noise_high_band)
+        self.tt_noise_nperseg = int(tt_noise_nperseg)
+        self.trs.wfs.Cn_ao,self.trs.tipTilt.Cn_tt = self.get_noise_variance(
+            noiseMethod=self.noiseMethod, nshift=nshift, nfit=nfit,
+            tt_noise_method=tt_noise_method, tt_noise_high_band=tt_noise_high_band,
+            tt_noise_nperseg=tt_noise_nperseg,
+        )
 
         if np.any(self.trs.wfs.Cn_ao):
             Cnn = np.diag(self.trs.wfs.Cn_ao)
@@ -118,9 +146,14 @@ class systemDiagnosis:
         #2.1. Define the frequency vectors
         self.trs.ttloop.tf.freq = np.linspace(self.trs.ttloop.freq/self.trs.tipTilt.nExp,self.trs.tipTilt.nExp/2,self.trs.tipTilt.nExp//2)*self.trs.ttloop.freq/self.trs.tipTilt.nExp
         #2.2 wfs TF
-        self.trs.ttloop.tf.wfs  = wfs_transfer_function(self.trs.ttloop.tf.freq,self.trs.ttloop.freq)
+        self.trs.ttloop.tf.wfs = _tt_sensor_integration_response(
+            self.trs.ttloop.tf.freq, self.trs.ttloop.freq
+        )
         #2.3 TT Lag tf
-        self.trs.ttloop.tf.lag = delay_transfer_function(self.trs.ttloop.tf.freq,self.trs.ttloop.freq,self.trs.ttloop.lat*self.trs.ttloop.freq)
+        self.trs.ttloop.tf.lag = _tt_latency_response(
+            self.trs.ttloop.tf.freq, self.trs.ttloop.freq,
+            self.trs.ttloop.lat * self.trs.ttloop.freq,
+        )
         #2.4 TT servo tf
         self.trs.ttloop.tf.servo = servo_transfer_function(self.trs.ttloop.tf.freq,self.trs.ttloop.freq,self.trs.ttloop.tf.num,self.trs.ttloop.tf.den)
         #2.5 open loop tf
@@ -159,7 +192,9 @@ class systemDiagnosis:
 
         return nph, ron, nph_tt, ron_tt
 
-    def get_noise_variance(self, noiseMethod='autocorrelation', nshift=1, nfit=2):
+    def get_noise_variance(self, noiseMethod='autocorrelation', nshift=1, nfit=2,
+                           tt_noise_method='van_dam', tt_noise_high_band=(0.65, 0.95),
+                           tt_noise_nperseg=512):
         """
             ESTIMATE THE WFS NOISE VARIANCE
         """
@@ -213,12 +248,42 @@ class systemDiagnosis:
             Cn_ao = np.zeros((nU,nU))
             nT    = self.trs.tipTilt.slopes.shape[1]
             Cn_tt = np.zeros((nT,nT))
+            self.trs.tipTilt.noise_estimation_method = 'nonoise'
+            self.trs.tipTilt.noise_estimation_diagnostics = {
+                'method': 'nonoise',
+                'noise_model_validated': False,
+                'note': 'Explicit zero-noise setting; no estimation performed',
+            }
 
         else:
             rtf  = self.trs.holoop.tf.ctf/self.trs.holoop.tf.wfs
             Cn_ao = slopes_to_noise(self.trs.dm.com,noiseMethod=noiseMethod,nshift=nshift,nfit=nfit,rtf=rtf)
-            rtf  = self.trs.ttloop.tf.ctf/self.trs.ttloop.tf.wfs
-            Cn_tt = slopes_to_noise(self.trs.tipTilt.slopes,noiseMethod=noiseMethod,nshift=nshift,nfit=nfit,rtf=rtf)
+            if self.trs.aoMode == 'LGS':
+                if tt_noise_method not in TT_METHODS:
+                    raise ValueError(
+                        f"Unknown TT noise method {tt_noise_method!r}: {TT_METHODS}"
+                    )
+                Cn_tt, diag = estimate_tt_noise(
+                    self.trs.tipTilt.slopes, method=tt_noise_method,
+                    sample_rate_hz=self.trs.ttloop.freq,
+                    rejection_frequency_hz=self.trs.ttloop.tf.freq,
+                    rejection_transfer=self.trs.ttloop.tf.rtf,
+                    high_frequency_band=tt_noise_high_band,
+                    nperseg=tt_noise_nperseg,
+                )
+                self.trs.tipTilt.noise_estimation_method = tt_noise_method
+                self.trs.tipTilt.noise_estimation_diagnostics = diag
+            else:
+                # Preserve the historical NGS path; STRAP van Dam is LGS-only.
+                rtf = self.trs.ttloop.tf.ctf/self.trs.ttloop.tf.wfs
+                Cn_tt = slopes_to_noise(
+                    self.trs.tipTilt.slopes, noiseMethod=noiseMethod,
+                    nshift=nshift, nfit=nfit, rtf=rtf
+                )
+                self.trs.tipTilt.noise_estimation_method = noiseMethod
+                self.trs.tipTilt.noise_estimation_diagnostics = {
+                    'method': noiseMethod, 'noise_model_validated': False
+                }
 
 
         return Cn_ao, Cn_tt

@@ -9,6 +9,7 @@ import argparse
 import json
 from pathlib import Path
 import time
+import tomllib
 
 import numpy as np
 
@@ -151,6 +152,35 @@ def _tt_sensitivity(model, observed, destination):
     print("TT sensitivity figure:", image_path, flush=True)
 
 
+def _plot_tt_noise_spectra(diagnostics, output):
+    """Measured STRAP Welch spectra versus fitted loop-shaped noise floors."""
+    if diagnostics.get("method") != "van_dam":
+        return
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    freq = np.asarray(diagnostics["frequency_hz"])
+    rejection = np.asarray(diagnostics["rejection_power"])
+    fit_band = diagnostics["high_frequency_band_hz"]
+    fig, axes = plt.subplots(2, 1, figsize=(10, 7), sharex=True,
+                             constrained_layout=True)
+    for axis, label in enumerate(("x", "y")):
+        ax = axes[axis]
+        psd = np.asarray(diagnostics[f"measured_psd_{label}_m2_per_hz"])
+        fitted = np.asarray(diagnostics[f"model_noise_psd_{label}_m2_per_hz"])
+        ax.semilogy(freq, np.maximum(psd, 1e-40), label="Observed STRAP residual PSD")
+        ax.semilogy(freq, np.maximum(fitted, 1e-40), label="van Dam fitted noise x |S(f)|²")
+        ax.axvspan(fit_band[0], fit_band[1], alpha=0.12, label="Noise-fit band")
+        ax.set_ylabel(f"PSD {label.upper()} [m²/Hz]")
+        ax.legend(loc="upper right")
+        ax.grid(alpha=0.2)
+    axes[-1].set_xlabel("Temporal frequency [Hz]")
+    fig.suptitle("Keck STRAP — van Dam PSD noise estimate (uncalibrated gain)")
+    fig.savefig(output, dpi=150)
+    plt.close(fig)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fits", type=Path, required=True)
@@ -159,7 +189,28 @@ def main():
     parser.add_argument("--output", type=Path, default=Path("results/n0013"))
     parser.add_argument("--tt-sensitivity", action="store_true",
                         help="Compare PSFs for different TT noise-subtraction fractions")
+    parser.add_argument(
+        "--config", type=Path,
+        default=Path(__file__).resolve().parents[1] / "config/keck_tt_noise.toml",
+        help="TOML file selecting the STRAP TT noise estimator",
+    )
+    parser.add_argument("--tt-noise-method",
+                        choices=("van_dam", "gendron", "legacy_autocorrelation"),
+                        help="Override config's TT-noise estimator")
+    parser.add_argument("--tt-noise-band", type=float, nargs=2,
+                        help="Override lower/upper fractions of Nyquist for van_dam")
+    parser.add_argument("--tt-welch-nperseg", type=int,
+                        help="Override Welch segment length for van_dam")
     args = parser.parse_args()
+    with args.config.open("rb") as conf_file:
+        noise_config = tomllib.load(conf_file).get("tip_tilt_noise", {})
+    tt_method = args.tt_noise_method or noise_config.get("method", "van_dam")
+    tt_band = (args.tt_noise_band if args.tt_noise_band is not None
+               else noise_config.get("high_frequency_band", [0.65, 0.95]))
+    tt_nperseg = (args.tt_welch_nperseg if args.tt_welch_nperseg is not None
+                   else noise_config.get("welch_nperseg", 512))
+    print(f"[STRAP noise] method={tt_method}, band={tt_band}, Welch={tt_nperseg}",
+          flush=True)
     for file in (args.fits, args.sav, args.calib):
         if not file.exists():
             parser.error(f"Not found: {file}")
@@ -182,7 +233,21 @@ def main():
         str(args.calib.resolve()), path_save=str(args.output.resolve()),
         cam_fov=128, nLayer=1, addNCPA=False,
     ))
-    sd = stage("systemDiagnosis", lambda: systemDiagnosis(trs))
+    sd = stage("systemDiagnosis", lambda: systemDiagnosis(
+        trs, tt_noise_method=tt_method, tt_noise_high_band=tt_band,
+        tt_noise_nperseg=tt_nperseg,
+    ))
+    noise_diagnostics = sd.trs.tipTilt.noise_estimation_diagnostics
+    (args.output / "tt_noise_diagnostics.json").write_text(
+        json.dumps(noise_diagnostics, indent=2), encoding="utf-8",
+    )
+    if noise_diagnostics.get("method") == "van_dam":
+        stage("STRAP noise PSD figure", lambda: _plot_tt_noise_spectra(
+            noise_diagnostics, args.output / "tt_noise_psd.png",
+        ))
+    noise_cov = np.asarray(sd.trs.tipTilt.Cn_tt)
+    print(f"[STRAP noise] covariance trace={np.trace(noise_cov):.6e} m²",
+          flush=True)
     stage("configFile", lambda: configFile(sd))
     model = stage("psfR", lambda: psfR(sd.trs))
 
@@ -217,6 +282,8 @@ def main():
         "input_fits": str(args.fits.resolve()),
         "input_sav": str(args.sav.resolve()),
         "addNCPA": False,
+        "tt_noise_method": tt_method,
+        "tt_noise_config": str(args.config.resolve()),
         "target": "LP415-20 (binary)",
         "psf_shape": list(psf.shape),
         "note": "No astrometric registration or binary fit performed",
