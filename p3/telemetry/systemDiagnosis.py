@@ -51,7 +51,7 @@ class systemDiagnosis:
     def __init__(self, trs, noiseMethod='autocorrelation', nshift=1, nfit=2,
                  noise=1, quantile=0.95, nWin=10, nZer=None, j0=4, Dout=None, Din=None,
                  tt_noise_method='van_dam', tt_noise_high_band=(0.65, 0.95),
-                 tt_noise_nperseg=512):
+                 tt_noise_nperseg=512, tt_mirror_model='unity'):
 
         self.trs = trs
 
@@ -69,7 +69,7 @@ class systemDiagnosis:
         self.trs.wfs.Cn_ao,self.trs.tipTilt.Cn_tt = self.get_noise_variance(
             noiseMethod=self.noiseMethod, nshift=nshift, nfit=nfit,
             tt_noise_method=tt_noise_method, tt_noise_high_band=tt_noise_high_band,
-            tt_noise_nperseg=tt_noise_nperseg,
+            tt_noise_nperseg=tt_noise_nperseg, tt_mirror_model=tt_mirror_model,
         )
 
         if np.any(self.trs.wfs.Cn_ao):
@@ -194,7 +194,7 @@ class systemDiagnosis:
 
     def get_noise_variance(self, noiseMethod='autocorrelation', nshift=1, nfit=2,
                            tt_noise_method='van_dam', tt_noise_high_band=(0.65, 0.95),
-                           tt_noise_nperseg=512):
+                           tt_noise_nperseg=512, tt_mirror_model='unity'):
         """
             ESTIMATE THE WFS NOISE VARIANCE
         """
@@ -263,15 +263,36 @@ class systemDiagnosis:
                     raise ValueError(
                         f"Unknown TT noise method {tt_noise_method!r}: {TT_METHODS}"
                     )
+                # Noise identified with the same W/K/P rejection model
+                # subsequently used for physical TT propagation. Without
+                # this, Ragland's plant response and a P3-unity van Dam
+                # noise covariance mix incompatible models.
+                if tt_mirror_model not in ('unity', 'ragland_2016_keck_ii'):
+                    raise ValueError("Unknown TT mirror model for noise: " + tt_mirror_model)
+                rejection = self.trs.ttloop.tf.rtf
+                if tt_noise_method == 'van_dam' and tt_mirror_model != 'unity':
+                    from p3.telemetry.ttClosedLoop import from_p3_tiptilt_loop
+                    rejection = from_p3_tiptilt_loop(
+                        self.trs.ttloop, mirror_model=tt_mirror_model
+                    ).sensitivity
                 Cn_tt, diag = estimate_tt_noise(
                     self.trs.tipTilt.slopes, method=tt_noise_method,
                     sample_rate_hz=self.trs.ttloop.freq,
                     rejection_frequency_hz=self.trs.ttloop.tf.freq,
-                    rejection_transfer=self.trs.ttloop.tf.rtf,
+                    rejection_transfer=rejection,
                     high_frequency_band=tt_noise_high_band,
                     nperseg=tt_noise_nperseg,
                 )
                 self.trs.tipTilt.noise_estimation_method = tt_noise_method
+                self.trs.tipTilt.noise_rejection_mirror_model = (
+                    tt_mirror_model if tt_noise_method == 'van_dam'
+                    else 'not_applicable'
+                )
+                diag['rejection_mirror_model'] = (
+                    self.trs.tipTilt.noise_rejection_mirror_model
+                )
+                diag['instrument_loop_gain_independently_validated'] = False
+                diag['optical_centroid_gain_independently_validated'] = False
                 self.trs.tipTilt.noise_estimation_diagnostics = diag
             else:
                 # Preserve the historical NGS path; STRAP van Dam is LGS-only.
