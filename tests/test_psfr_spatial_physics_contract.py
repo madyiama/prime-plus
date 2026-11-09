@@ -59,3 +59,35 @@ def test_dm_fitting_sf_scales_as_r0_to_minus_five_thirds():
     # Structure-function zero lag is the middle cell after fftshift.
     assert abs(dphi_lo[n // 2, n // 2]) < 1e-10
     assert np.max(dphi_lo) > 0
+
+
+def test_dm_fitting_sf_matches_independent_psd_quadrature_at_one_lag():
+    """Independent cosine-integral check, not a repeat of the FFT algorithm."""
+    n = 32
+    diameter_m = 10.5
+    sampling = 2.0
+    dk = 1.0 / (diameter_m * sampling)
+    k = (np.arange(n) - n // 2) * dk
+    kx, ky = np.meshgrid(k, k)
+    outer_scale_m = 25.0
+    cutoff_inv_m = 0.35
+    base_psd = 0.0229 * (kx**2 + ky**2 + outer_scale_m**-2)**(-11.0/6.0)
+    base_psd *= (kx**2 + ky**2 >= cutoff_inv_m**2)
+    # Discrete grid, with piston contribution omitted.
+    base_psd[n // 2, n // 2] = 0.0
+
+    model = psfR.__new__(psfR)
+    model.ao = NS(tel=NS(D=diameter_m))
+    model.freq = NS(psdKolmo_=base_psd, sampRef=sampling)
+    r0_m = 0.20
+    dphi = model.fitting_phase_structure_function(r0_m)
+
+    rho_x_m = 1.0 / (n * dk)
+    expected = 2 * dk**2 * r0_m**(-5.0/3.0) * np.sum(
+        base_psd * (1.0 - np.cos(2 * np.pi * kx * rho_x_m))
+    )
+    assert expected > 0
+    np.testing.assert_allclose(
+        dphi[n // 2, n // 2 + 1], expected,
+        rtol=1e-10, atol=1e-10,
+    )
