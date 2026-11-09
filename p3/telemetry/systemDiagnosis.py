@@ -225,6 +225,12 @@ class systemDiagnosis:
             Cn_ao = np.zeros((nU,nU))
             nT    = self.trs.tipTilt.slopes.shape[1]
             Cn_tt = np.zeros((nT,nT))
+            self.trs.tipTilt.noise_estimation_method = 'nonoise'
+            self.trs.tipTilt.noise_estimation_diagnostics = {
+                'method': 'nonoise',
+                'noise_model_validated': False,
+                'note': 'Explicit zero-noise setting; no estimation performed',
+            }
 
         else:
             rtf  = self.trs.holoop.tf.ctf/self.trs.holoop.tf.wfs
