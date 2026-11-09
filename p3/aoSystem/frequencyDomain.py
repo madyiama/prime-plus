@@ -197,10 +197,17 @@ class frequencyDomain():
         self.sampCen = self.kCen_ * sampCen
 
         psdSteps = self.psInMas/(self.wvl*rad2mas*self.k_)
-        if psdSteps.shape[0] > 1:
+        # The reference OTF coordinates use wvlRef and kRef_float.  The
+        # spatial PSD Fourier grid must describe the same pupil-lag scale:
+        # PSDstep = 1/(D*sampRef).  The default shared-grid path has no
+        # spectral expansion, so it must choose the REFERENCE wavelength,
+        # not the finest PSD step in the whole detector passband.
+        # With psdExpansion=True, selecting the finest step is intentional;
+        # kRef_float below compensates for the different wavelength.
+        if self.ao.psdExpansion and psdSteps.shape[0] > 1:
             idxPmin = nnp.argmin(psdSteps)
         else:
-            idxPmin = 0
+            idxPmin = idxWmin
         self.PSDstep = np.asarray(psdSteps[idxPmin], dtype=self.dtype)
 
         if self.ao.psdExpansion:
