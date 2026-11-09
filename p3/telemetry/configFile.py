@@ -140,6 +140,11 @@ class configFile():
                            str(diag.get('high_frequency_band_fraction_nyquist')))
                 parser.set('sensor_LO', 'NoisePSDWelchSegmentLength',
                            str(diag.get('welch_nperseg')))
+            else:
+                # A previous run may have written van Dam-only options to
+                # this file. Remove stale metadata if another method is used.
+                parser.remove_option('sensor_LO', 'NoisePSDHighFrequencyBand')
+                parser.remove_option('sensor_LO', 'NoisePSDWelchSegmentLength')
             parser.set('sensor_LO','Algorithm', '\''+sysdiag.trs.tipTilt.algo+'\'')
             parser.set('sensor_LO','WindowRadiusWCoG', str(sysdiag.trs.tipTilt.win))
             parser.set('sensor_LO','ThresholdWCoG', str(sysdiag.trs.tipTilt.thres))
