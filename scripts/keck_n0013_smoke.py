@@ -201,16 +201,50 @@ def main():
                         help="Override lower/upper fractions of Nyquist for van_dam")
     parser.add_argument("--tt-welch-nperseg", type=int,
                         help="Override Welch segment length for van_dam")
+    parser.add_argument(
+        "--tt-jitter-model",
+        choices=("legacy_psfr", "spectral_closed_loop"),
+        help="TT physical covariance used for OTF; overrides TOML",
+    )
+    parser.add_argument(
+        "--tt-mirror-model",
+        choices=("unity", "ragland_2016_keck_ii"),
+        help="TT actuator model; overrides TOML",
+    )
+    parser.add_argument(
+        "--tt-jitter-welch-nperseg", type=int,
+        help="Welch segment length for physical TT spectral covariance",
+    )
+    parser.add_argument(
+        "--disable-tt-jitter", action="store_true",
+        help=("Diagnostic ablation only: omit TT jitter from PSF-R OTF, "
+              "without changing other components or fitting observations"),
+    )
     args = parser.parse_args()
     with args.config.open("rb") as conf_file:
-        noise_config = tomllib.load(conf_file).get("tip_tilt_noise", {})
+        full_config = tomllib.load(conf_file)
+    noise_config = full_config.get("tip_tilt_noise", {})
     tt_method = args.tt_noise_method or noise_config.get("method", "van_dam")
     tt_band = (args.tt_noise_band if args.tt_noise_band is not None
                else noise_config.get("high_frequency_band", [0.65, 0.95]))
     tt_nperseg = (args.tt_welch_nperseg if args.tt_welch_nperseg is not None
                    else noise_config.get("welch_nperseg", 512))
+    jitter_config = full_config.get("tip_tilt_jitter", {})
+    tt_jitter_model = args.tt_jitter_model or jitter_config.get("method", "legacy_psfr")
+    tt_mirror_model = args.tt_mirror_model or jitter_config.get("mirror_model", "unity")
+    tt_jitter_nperseg = (
+        args.tt_jitter_welch_nperseg if args.tt_jitter_welch_nperseg is not None
+        else jitter_config.get("welch_nperseg", tt_nperseg)
+    )
+    if args.tt_sensitivity and tt_jitter_model != "legacy_psfr":
+        parser.error(
+            "--tt-sensitivity scales the historical sensor-noise subtraction; "
+            "it is only defined for --tt-jitter-model legacy_psfr"
+        )
     print(f"[STRAP noise] method={tt_method}, band={tt_band}, Welch={tt_nperseg}",
           flush=True)
+    print(f"[TT jitter OTF] method={tt_jitter_model}, mirror={tt_mirror_model}, "
+          f"Welch={tt_jitter_nperseg}", flush=True)
     for file in (args.fits, args.sav, args.calib):
         if not file.exists():
             parser.error(f"Not found: {file}")
@@ -249,7 +283,15 @@ def main():
     print(f"[STRAP noise] covariance trace={np.trace(noise_cov):.6e} m²",
           flush=True)
     stage("configFile", lambda: configFile(sd))
-    model = stage("psfR", lambda: psfR(sd.trs))
+    if args.disable_tt_jitter:
+        print("[TT jitter OTF] DISABLED for ablation (not a physical model)",
+              flush=True)
+    model = stage("psfR", lambda: psfR(
+        sd.trs, compute_dphi_jitter=not args.disable_tt_jitter,
+        tt_covariance_mode=tt_jitter_model,
+        tt_mirror_model=tt_mirror_model,
+        tt_welch_nperseg=tt_jitter_nperseg,
+    ))
 
     # [r0, gho, gtt] keeps P3's default K-band throughput at all three
     # wavelength bins. Passing [r0, 1, 1, 1, 0, 0, 0, ...] instead assigns
@@ -284,6 +326,12 @@ def main():
         "addNCPA": False,
         "tt_noise_method": tt_method,
         "tt_noise_config": str(args.config.resolve()),
+        "tt_jitter_covariance_method": tt_jitter_model,
+        "tt_mirror_model": tt_mirror_model,
+        "tt_jitter_welch_nperseg": tt_jitter_nperseg,
+        "tt_jitter_noise_model_validated": False,
+        "tt_jitter_otf_enabled": not args.disable_tt_jitter,
+        "tt_jitter_ablated_for_diagnostics": bool(args.disable_tt_jitter),
         "target": "LP415-20 (binary)",
         "psf_shape": list(psf.shape),
         "note": "No astrometric registration or binary fit performed",

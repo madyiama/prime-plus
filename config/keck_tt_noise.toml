@@ -8,3 +8,11 @@ method = "van_dam"
 # rejection-corrected white measurement-noise PSD.
 high_frequency_band = [0.65, 0.95]
 welch_nperseg = 512
+
+# Tip-tilt covariance propagated into the PSF-R optical transfer function.
+# Preserve historical behavior by default until the instrument model has
+# been calibrated independently. "spectral_closed_loop" is opt-in.
+[tip_tilt_jitter]
+method = "legacy_psfr" # or "spectral_closed_loop"
+mirror_model = "unity" # or "ragland_2016_keck_ii" (published 2016 model)
+welch_nperseg = 512
