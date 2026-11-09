@@ -153,3 +153,29 @@ def test_spectral_mode_prohibits_ngs_without_validation():
     model.trs.aoMode = "NGS"
     with pytest.raises(ValueError, match="requires Keck LGS"):
         model.jitter_phase_structure_function()
+
+
+def test_ragland_noise_transfer_mismatch_is_visible_not_silently_validated():
+    model = _mock_model("spectral_closed_loop")
+    model.tt_mirror_model = "ragland_2016_keck_ii"
+    model.trs.tipTilt.noise_estimation_method = "van_dam"
+    c_atmos = np.diag([1.3e-13, 1.7e-13])
+    c_noise = np.diag([0.4e-13, 0.6e-13])
+    c_total = c_atmos + c_noise
+    diagnostics = {
+        "gain_sensor_to_measured_noise": 1.01,
+        "gain_sensor_to_physical_noise": 0.0512,
+        "physical_atmos_min_eig_m2": 1.3e-13,
+        "physical_total_min_eig_m2": 1.7e-13,
+    }
+    with patch(
+        "p3.psfr.psfR.physical_tt_covariance_from_telemetry",
+        return_value=(c_atmos, c_noise, c_total, diagnostics),
+    ):
+        with pytest.warns(RuntimeWarning, match="sensitivity study only"):
+            model.jitter_phase_structure_function()
+    diag = model.tiptilt_diagnostics
+    assert diag["measurement_noise_estimator"] == "van_dam"
+    assert diag["van_dam_rejection_model"] == "p3_pure_delay"
+    assert diag["noise_transfer_mismatch"] is True
+    assert diag["noise_model_validated"] is False
