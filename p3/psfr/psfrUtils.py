@@ -151,8 +151,11 @@ def modes2Otf(Cmm, modes, pupil, n_otf, samp=2, basis='Vii'):
         tolerance = max(1e-12*float(np.max(np.abs(eigenvalues))), 1e-24)
         if np.min(eigenvalues) < -tolerance:
             raise ValueError(
-                "Modal covariance is not positive-semidefinite; "
-                "review noise subtraction before PSF reconstruction"
+                "Modal covariance is not positive-semidefinite: "
+                f"lambda_min={np.min(eigenvalues):.6e}, "
+                f"lambda_max={np.max(eigenvalues):.6e}, "
+                f"tolerance={tolerance:.6e} (in input covariance units). "
+                "Review HO noise subtraction before PSF reconstruction"
             )
         ss = np.clip(eigenvalues, 0, None)
         nModes = len(ss)
