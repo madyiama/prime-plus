@@ -183,12 +183,20 @@ def test_transfer_and_noise_validation_reject_nonphysical_inputs():
         closed_loop_transfers(f, sensor=1., controller=-1., plant=1.)
     with pytest.raises(ValueError, match="Stable integrator gain"):
         integrator_delay_transfers(f, 125., 2.1)
+    full_freq = np.array([0., 31.25, 62.5])
     with pytest.raises(ValueError, match="near-zero WFS"):
         model = closed_loop_transfers(
-            f, sensor=0., controller=0.5, plant=1.
+            full_freq, sensor=0., controller=0.5, plant=1.
         )
         propagate_spectral_covariances(
             model, np.zeros((2,2,3)), np.eye(2)*1e-13, 125.
+        )
+    with pytest.raises(ValueError, match="full one-sided spectrum"):
+        incomplete = closed_loop_transfers(
+            np.array([5., 10., 20.]), sensor=1., controller=0.5, plant=1.
+        )
+        propagate_spectral_covariances(
+            incomplete, np.zeros((2,2,3)), np.eye(2)*1e-13, 125.
         )
 
 
