@@ -132,10 +132,31 @@ def modes2Otf(Cmm, modes, pupil, n_otf, samp=2, basis='Vii'):
     den[msk] = 1/G[msk]
 
     if np.any(Cmm) and basis=="Vii":
-        # Diagonalizing the Cvv matrix
-        U, ss ,V = np.linalg.svd(Cmm)
+        # Cmm is a covariance, not an arbitrary matrix. Using SVD singular
+        # values would silently turn a negative eigenvalue into positive
+        # variance; Vh would also apply eigenvectors in the wrong direction.
+        covariance = np.asarray(Cmm, dtype=float)
+        if covariance.shape != (modes.shape[1], modes.shape[1]):
+            raise ValueError("Modal covariance and influence modes have incompatible shapes")
+        if not np.isfinite(covariance).all():
+            raise ValueError("Modal covariance contains non-finite values")
+        scale = max(float(np.max(np.abs(covariance))), 1e-30)
+        if np.max(np.abs(covariance-covariance.T)) > 1e-10*scale:
+            raise ValueError("Modal covariance must be symmetric")
+        eigenvalues, eigenvectors = np.linalg.eigh(
+            0.5*(covariance+covariance.T)
+        )
+        # Roundoff-scale negative eigenvalues are allowed, but a material
+        # negative variance is never converted to a positive contribution.
+        tolerance = max(1e-12*float(np.max(np.abs(eigenvalues))), 1e-24)
+        if np.min(eigenvalues) < -tolerance:
+            raise ValueError(
+                "Modal covariance is not positive-semidefinite; "
+                "review noise subtraction before PSF reconstruction"
+            )
+        ss = np.clip(eigenvalues, 0, None)
         nModes = len(ss)
-        M_all = np.dot(modes, V)
+        M_all = np.dot(modes, eigenvectors)
         M_all = M_all.reshape(n_pup, n_pup, nModes)
         M_all = FourierUtils.enlargeSupport(M_all, samp)*pup_pad[:, :, np.newaxis]
 
