@@ -34,3 +34,9 @@ coverage.xml
 
 .vscode
 .DS_Store
+
+# Local scientific data and benchmark outputs (do not commit FITS/SAV)
+.venv/
+.pytest_cache/
+results/
+*.sav
