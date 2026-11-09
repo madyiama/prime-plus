@@ -1,4 +1,6 @@
 """Synthetic validation of van Dam, Gendron, and legacy STRAP noise estimates."""
+import warnings
+
 import numpy as np
 import pytest
 
@@ -106,3 +108,52 @@ def test_van_dam_rejects_invalid_configuration_instead_of_falling_back():
 
 def test_available_methods_are_explicit():
     assert TT_METHODS == ("van_dam", "gendron", "legacy_autocorrelation")
+
+def test_filtered_white_noise_does_not_trigger_spurious_variance_warning():
+    data, _, frequencies, rejection = _filtered_white_noise()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", RuntimeWarning)
+        _, diag = estimate_tt_noise(
+            data, sample_rate_hz=125.0,
+            rejection_frequency_hz=frequencies, rejection_transfer=rejection,
+            nperseg=1024,
+        )
+    assert not any(
+        "predicted filtered STRAP measurement noise" in str(w.message)
+        for w in caught
+    )
+    # The correct comparison is sensor noise propagated through S(f),
+    # rather than sensor noise covariance directly versus residual variance.
+    c_measured = np.asarray(diag["observed_covariance_m2"])
+    c_predicted = np.asarray(diag["predicted_observed_noise_covariance_m2"])
+    np.testing.assert_allclose(
+        np.diag(c_predicted), np.diag(c_measured), rtol=0.10,
+    )
+    assert 0 < diag["mean_rejection_power"] < 1
+    assert diag["consistency_guard_relative_tolerance"] >= 0.10
+
+
+def test_high_frequency_contamination_raises_physical_consistency_warning():
+    # Artificially concentrate all of a residual's power inside the fit band.
+    # Extrapolating that narrow-band PSD as white noise across *all* frequencies
+    # must fail the integrated measured-noise consistency check.
+    fs, n = 125.0, 32768
+    noise = np.random.default_rng(77).normal(size=(n, 2)) * 1e-7
+    spectrum = np.fft.rfft(noise, axis=0)
+    freq = np.fft.rfftfreq(n, d=1/fs)
+    in_band = (freq >= 0.65*(fs/2)) & (freq <= 0.95*(fs/2))
+    spectrum[~in_band] = 0
+    filtered = np.fft.irfft(spectrum, n=n, axis=0)
+    loop_freq = np.linspace(0, fs/2, 4096)
+    with pytest.warns(
+        RuntimeWarning, match="predicted filtered STRAP measurement noise"
+    ):
+        _, diag = estimate_tt_noise(
+            filtered, sample_rate_hz=fs,
+            rejection_frequency_hz=loop_freq,
+            rejection_transfer=np.ones_like(loop_freq),
+            nperseg=1024,
+        )
+    assert max(diag["predicted_observed_noise_fraction_per_axis"]) > (
+        1.0 + diag["consistency_guard_relative_tolerance"]
+    )
