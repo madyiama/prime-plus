@@ -82,7 +82,7 @@ def test_spectral_mode_injects_total_physical_covariance_without_double_count():
     np.testing.assert_allclose(dphi, expected, rtol=1e-13)
     assert np.max(np.exp(-0.5*dphi)) <= 1.0 + 1e-13
     assert model.tiptilt_diagnostics["jitter_covariance_method"] == "spectral_closed_loop"
-    assert model.tiptilt_diagnostics["negative_variance_projected"] is False
+    assert model.tiptilt_diagnostics["covariance_projection_applied"] is False
     assert model.tiptilt_diagnostics["noise_model_validated"] is False
 
 
