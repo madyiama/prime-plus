@@ -184,6 +184,15 @@ def propagate_spectral_covariances(
     fs = float(sample_rate_hz)
     if f[0] < 0 or f[-1] > fs/2 + 1e-8:
         raise ValueError("Frequency grid lies outside [0, Nyquist]")
+    full_spectrum = (
+        f[0] <= 0.001*fs/2
+        and abs(f[-1]-fs/2) <= 0.001*fs/2
+    )
+    if not full_spectrum:
+        raise ValueError(
+            "Physical covariance requires the full one-sided spectrum "
+            "from DC through Nyquist; a partial band is not a covariance."
+        )
     power = np.asarray(measured_cospectrum_m2_hz, dtype=float)
     if power.shape != (2, 2, len(f)) or not np.all(np.isfinite(power)):
         raise ValueError("Measured cospectrum must have shape (2,2,n_frequency)")
@@ -219,9 +228,7 @@ def propagate_spectral_covariances(
     return {
         "frequency_min_hz": float(f[0]),
         "frequency_max_hz": float(f[-1]),
-        "spectral_coverage_full_nyquist": bool(
-            f[0] <= 0.001*fs/2 and abs(f[-1]-fs/2) <= 0.001*fs/2
-        ),
+        "spectral_coverage_full_nyquist": True,
         "white_sensor_noise_cov_m2": np.asarray(sensor_noise_cov_m2).tolist(),
         "measured_residual_cov_m2": _integrate_cospectrum(power, f).tolist(),
         "measured_noise_cov_m2": measured_noise_cov.tolist(),
