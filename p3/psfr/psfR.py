@@ -367,8 +367,6 @@ class psfR:
                 getattr(self.trs.tipTilt, "command_units_verified", False)
             ),
         }
-        Ctt = self.tt_model_cov
-
         self.tiptilt_diagnostics['jitter_covariance_method'] = 'legacy_psfr'
         self.tiptilt_diagnostics['tt_mirror_model'] = 'unity'
         return self.tt_model_cov
