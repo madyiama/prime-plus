@@ -215,6 +215,11 @@ def main():
         "--tt-jitter-welch-nperseg", type=int,
         help="Welch segment length for physical TT spectral covariance",
     )
+    parser.add_argument(
+        "--disable-tt-jitter", action="store_true",
+        help=("Diagnostic ablation only: omit TT jitter from PSF-R OTF, "
+              "without changing other components or fitting observations"),
+    )
     args = parser.parse_args()
     with args.config.open("rb") as conf_file:
         full_config = tomllib.load(conf_file)
@@ -278,8 +283,12 @@ def main():
     print(f"[STRAP noise] covariance trace={np.trace(noise_cov):.6e} m²",
           flush=True)
     stage("configFile", lambda: configFile(sd))
+    if args.disable_tt_jitter:
+        print("[TT jitter OTF] DISABLED for ablation (not a physical model)",
+              flush=True)
     model = stage("psfR", lambda: psfR(
-        sd.trs, tt_covariance_mode=tt_jitter_model,
+        sd.trs, compute_dphi_jitter=not args.disable_tt_jitter,
+        tt_covariance_mode=tt_jitter_model,
         tt_mirror_model=tt_mirror_model,
         tt_welch_nperseg=tt_jitter_nperseg,
     ))
@@ -321,6 +330,8 @@ def main():
         "tt_mirror_model": tt_mirror_model,
         "tt_jitter_welch_nperseg": tt_jitter_nperseg,
         "tt_jitter_noise_model_validated": False,
+        "tt_jitter_otf_enabled": not args.disable_tt_jitter,
+        "tt_jitter_ablated_for_diagnostics": bool(args.disable_tt_jitter),
         "target": "LP415-20 (binary)",
         "psf_shape": list(psf.shape),
         "note": "No astrometric registration or binary fit performed",
