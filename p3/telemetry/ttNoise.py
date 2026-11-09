@@ -108,16 +108,19 @@ def estimate_tt_noise(
     f, pxx = welch(data[:, 0], **kwargs)
     _, pyy = welch(data[:, 1], **kwargs)
     _, pxy = csd(data[:, 0], data[:, 1], **kwargs)
-    rejection_power = np.interp(
-        f, f_loop, np.abs(s_loop)**2, left=np.nan, right=np.nan
-    )
     nyquist = fs/2
     fit = (f >= lo*nyquist) & (f <= hi*nyquist)
     if np.count_nonzero(fit) < 8:
         raise ValueError("Too few spectral bins in van_dam fit band")
+    if f[fit][0] < f_loop[0] or f[fit][-1] > f_loop[-1]:
+        raise ValueError("Loop rejection frequency grid does not cover the fitting band")
+    power_loop = np.abs(s_loop)**2
+    rejection_power = np.interp(
+        f, f_loop, power_loop, left=power_loop[0], right=power_loop[-1]
+    )
     if (not np.isfinite(rejection_power[fit]).all()
             or np.any(rejection_power[fit] < 1e-4)):
-        raise ValueError("Rejection model does not cover the fitting band")
+        raise ValueError("Rejection power too small or non-finite in fitting band")
 
     # In sensor-centroid PSD: P_measurement_noise(f)=|S(f)|² * N0.
     # N0 is a one-sided white noise floor in m²/Hz.
