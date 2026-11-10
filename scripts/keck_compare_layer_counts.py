@@ -38,10 +38,13 @@ def _read_run(path):
     budget = _read_json(root / "error_breakdown_diagnostics.json")
     if not budget:
         budget = meta.get("error_breakdown_diagnostics") or {}
+    anisoplanatism = _read_json(root / "anisoplanatism_diagnostics.json")
+    if not anisoplanatism:
+        anisoplanatism = meta.get("anisoplanatism_diagnostics") or {}
     if not atmosphere:
         raise ValueError(f"No atmosphere provenance in {root}")
     cube = np.load(root / "telemetry_only_psf.npy", allow_pickle=False)
-    return meta, atmosphere, budget, cube
+    return meta, atmosphere, budget, anisoplanatism, cube
 
 
 def _normalized_image(cube):
@@ -81,8 +84,8 @@ def _encircled_energy(image, radii=(2, 4, 8, 16, 32)):
 
 
 def compare(one, seven, *, allow_mismatch=False):
-    meta_1, atm_1, err_1, cube_1 = _read_run(one)
-    meta_7, atm_7, err_7, cube_7 = _read_run(seven)
+    meta_1, atm_1, err_1, aniso_1, cube_1 = _read_run(one)
+    meta_7, atm_7, err_7, aniso_7, cube_7 = _read_run(seven)
     flags = []
     comparisons = {
         "input_fits": (
@@ -154,6 +157,8 @@ def compare(one, seven, *, allow_mismatch=False):
     sha_7 = (meta_7.get("code_revision") or {}).get("git_revision")
     if not err_1 or not err_7:
         flags.append("INCOMPLETE_WFE_ERROR_BUDGET")
+    if not aniso_1 or not aniso_7:
+        flags.append("INCOMPLETE_ANISOPLANATISM_DIAGNOSTICS")
     if sha_1 != sha_7:
         flags.append("DIFFERENT_CODE_REVISIONS")
         warnings.warn(
@@ -177,6 +182,15 @@ def compare(one, seven, *, allow_mismatch=False):
         "total_variation_distance": float(0.5 * np.sum(np.abs(img7-img1))),
         "encircled_energy_one_by_pixel_radius": _encircled_energy(img1),
         "encircled_energy_seven_by_pixel_radius": _encircled_energy(img7),
+        "anisoplanatism_one": aniso_1,
+        "anisoplanatism_seven": aniso_7,
+        "anisoplanatism_difference_seven_minus_one": {
+            k: float(aniso_7[k])-float(aniso_1[k])
+            for k in aniso_1.keys() & aniso_7.keys()
+            if k.endswith("_wfe_nm")
+            and isinstance(aniso_1[k], (float, int))
+            and isinstance(aniso_7[k], (float, int))
+        },
         "error_budget_one": err_1,
         "error_budget_seven": err_7,
         "error_budget_difference_seven_minus_one": {
