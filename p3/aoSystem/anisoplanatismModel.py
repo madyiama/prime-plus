@@ -270,7 +270,10 @@ def angular_function(tel, atm, src, gs, nOtf, samp, method="Fourier", msk_in=1, 
 
     return Dani_l
 
-def focal_angular_function(tel, atm, src, gs, nActu, nOtf, samp, h_filt=1):
+def focal_angular_function(
+    tel, atm, src, gs, nActu, nOtf, samp, h_filt=1,
+    *, pupil_grid_mode='legacy', output_grid='otf',
+):
     """
     Returns the nActu**2 x nActu**2 point wise phase structure function
     for the focal-angular anisoplanatism  by following Flicker's 2008 report.
@@ -282,6 +285,14 @@ def focal_angular_function(tel, atm, src, gs, nActu, nOtf, samp, h_filt=1):
 
 
     #1\ Grabbing inputs
+    # Defaults preserve the production algorithm exactly. Two opt-in
+    # audit-only choices expose the raw per-baseline SF and sample
+    # actual physical telescope-pupil coordinates. Neither changes
+    # matrix_to_map's square-grid, unmasked pair averaging.
+    if pupil_grid_mode not in ('legacy', 'physical_diameter'):
+        raise ValueError("Unknown focal pupil_grid_mode: " + str(pupil_grid_mode))
+    if output_grid not in ('otf', 'native'):
+        raise ValueError("Unknown focal output_grid: " + str(output_grid))
     umax = tel.D/2 * max([1,samp])/2
     # The exact Kolmogorov limit must be evaluated analytically, NOT by
     # setting L0 to an enormous finite value: the McDonald covariance
@@ -311,7 +322,6 @@ def focal_angular_function(tel, atm, src, gs, nActu, nOtf, samp, h_filt=1):
         return X, Y, rho_x, rho_y
 
     #2\ SF Calculation
-    Dani_l = np.zeros((src.nSrc, atm.nL, nOtf, nOtf))
     # SLAO uses one deformable mirror; nActu1D can be a one-element
     # NumPy array even though the geometrical calculation needs a scalar.
     n_actu_values = np.asarray(nActu)
@@ -322,9 +332,17 @@ def focal_angular_function(tel, atm, src, gs, nActu, nOtf, samp, h_filt=1):
         raise ValueError("DM actuator count must be a positive integer")
     n_ph = 2 * int(n_actu) + 1
 
-    # Angular frequencies
-    X1, Y1, rhoX, rhoY = vector_to_separation(umax/n_ph * (np.array(range(n_ph)) - n_ph//2))
-    _, _, sep_x, sep_y = vector_to_separation(np.array(range(n_ph)))
+    # All coordinates below are physical metres in the telescope pupil.
+    # Legacy grid is preserved bit-for-bit for default reconstructions.
+    # The physical alternative spans [-D/2, D/2] on each pupil axis.
+    if pupil_grid_mode == 'legacy':
+        u = umax/n_ph * (np.arange(n_ph) - n_ph//2)
+    else:
+        u = np.linspace(-tel.D/2, tel.D/2, n_ph)
+    X1, Y1, rhoX, rhoY = vector_to_separation(u)
+    _, _, sep_x, sep_y = vector_to_separation(np.arange(n_ph))
+    grid_size = (2*n_ph - 1) if output_grid == 'native' else nOtf
+    Dani_l = np.zeros((src.nSrc, atm.nL, grid_size, grid_size))
 
     # Instantiation
     if kolmogorov_limit:
@@ -385,7 +403,12 @@ def focal_angular_function(tel, atm, src, gs, nActu, nOtf, samp, h_filt=1):
                 cmap = FourierUtils.matrix_to_map(tmp, sep_x=sep_x, sep_y=sep_y)
 
                 # ---- interpolation
-                Dani_l[iSrc, l] = FourierUtils.interpolateSupport(cmap, nOtf)
+                # Native output exposes the physical covariance-lag axis
+                # to audit scripts. Production still does the original zoom.
+                Dani_l[iSrc, l] = (
+                    cmap if output_grid == 'native'
+                    else FourierUtils.interpolateSupport(cmap, nOtf)
+                )
 
     return cte*Dani_l
 
