@@ -838,6 +838,7 @@ def main():
         "addNCPA": False,
         "ao_mode": str(trs.aoMode),
         "atmosphere_reconstruction_audit": atmosphere_audit,
+        "forward_parameters_diagnostics": forward_audit,
         "pupil_orientation_diagnostics": pupil_diagnostics,
         "massdimm_diagnostics": massdimm_diagnostics,
         "tt_kernel_convention": model.tt_kernel_convention,
