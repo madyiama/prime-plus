@@ -121,6 +121,86 @@ def _validate_canonical_tt_geometry(diameter_m):
         )
 
 
+def _structure_function_wfe_bridge(dphi, otf_dl, wavelength_m):
+    """Relate a pupil-averaged SF to two *distinct* phase-variance estimates.
+
+    For P(rho)=OTF_DL(rho)/sum(OTF_DL) (assuming nonnegative real
+    pupil autocorrelation and a valid pupil-averaged structure function):
+
+      piston_removed_phase_variance = 0.5 * sum(P(rho)*Dphi(rho))
+      Strehl_factor = sum(P(rho)*exp(-Dphi(rho)/2))
+      Strehl_equivalent_phase_variance = -log(Strehl_factor)
+
+    The first formula is an exact second-moment identity for the same
+    ensemble and aperture; the second is nonlinear (Jensen's inequality
+    implies Strehl-equivalent variance <= pupil variance). Neither
+    quantity is *automatically* equal to Hardy's Kolmogorov cone result
+    if finite L0, pupil, filtering or geometry assumptions differ.
+    """
+    dphi = np.asarray(dphi, dtype=float)
+    otf_dl = np.asarray(otf_dl, dtype=float)
+    wavelength_m = float(wavelength_m)
+    if (dphi.ndim != 2 or dphi.shape != otf_dl.shape
+            or not np.all(np.isfinite(dphi))
+            or not np.all(np.isfinite(otf_dl))
+            or wavelength_m <= 0 or not np.isfinite(wavelength_m)):
+        raise ValueError("SF bridge needs matching finite 2-D arrays and lambda>0")
+    dc = float(dphi[dphi.shape[0]//2, dphi.shape[1]//2])
+    if abs(dc) > 1e-9:
+        raise ValueError(
+            f"SF bridge requires Dphi(0)=0; got {dc:g} rad^2"
+        )
+    if np.min(otf_dl) < -1e-10:
+        raise ValueError(
+            "Negative diffraction OTF weights invalidate pupil "
+            "average and Jensen check; inspect the pupil OTF"
+        )
+    weights = np.maximum(otf_dl, 0.0)
+    area = float(weights.sum())
+    if area <= 0:
+        raise ValueError("Pupil OTF has zero total support")
+    weights /= area
+    pupil_phase_variance = 0.5 * float(np.sum(weights * dphi))
+    strehl = float(np.sum(weights * np.exp(-0.5*dphi)))
+    if strehl <= 0 or not np.isfinite(strehl):
+        raise ValueError("SF bridge gave nonphysical Strehl")
+    strehl_phase_variance = -float(np.log(strehl))
+    if pupil_phase_variance < -1e-9:
+        raise ValueError("Pupil-weighted structure function has negative variance")
+    if strehl_phase_variance > pupil_phase_variance + 1e-9:
+        raise ValueError(
+            "Jensen inequality violation: inconsistent SF or OTF normalization"
+        )
+    nm_per_rad = wavelength_m * 1e9 / (2*np.pi)
+    return {
+        "reference_wavelength_m": wavelength_m,
+        "sf_min_rad2": float(np.min(dphi)),
+        "sf_max_rad2": float(np.max(dphi)),
+        "sf_zero_lag_rad2": dc,
+        "pupil_piston_removed_phase_variance_rad2": pupil_phase_variance,
+        "pupil_piston_removed_wfe_nm": float(
+            np.sqrt(max(pupil_phase_variance, 0.0))*nm_per_rad
+        ),
+        "strehl_equivalent_phase_variance_rad2": strehl_phase_variance,
+        "strehl_equivalent_wfe_nm": float(
+            np.sqrt(max(strehl_phase_variance, 0.0))*nm_per_rad
+        ),
+        "anisoplanatism_only_strehl_factor": strehl,
+        "jensen_gap_phase_variance_rad2": (
+            pupil_phase_variance - strehl_phase_variance
+        ),
+        "jensen_ratio_strehl_to_pupil_variance": (
+            strehl_phase_variance/pupil_phase_variance
+            if pupil_phase_variance > 0 else None
+        ),
+        "note": (
+            "Pupil-weighted SF moment is a linear phase-variance identity; "
+            "minus log Strehl is nonlinear. Both use the same SF, unlike "
+            "the independent infinite-L0 Hardy analytic expression."
+        ),
+    }
+
+
 def _telemetry_forward_parameters(model, gho=1.0, gtt=1.0):
     """Build PSF-R's on-axis forward vector for 1 or multiple turbulence layers.
 
@@ -933,6 +1013,11 @@ def main():
             np.sum(otf_dl * np.exp(-0.5*dani)) / np.sum(otf_dl)
         )
         anisoplanatism_audit.update({
+            "pupil_sf_bridge_total_anisoplanatism": (
+                _structure_function_wfe_bridge(
+                    dani, otf_dl, float(model.freq.wvlRef)
+                )
+            ),
             "anisoplanatism_dphi_min_rad2": float(np.min(dani)),
             "anisoplanatism_dphi_max_rad2": float(np.max(dani)),
             "anisoplanatism_dphi_center_rad2": float(
@@ -960,6 +1045,58 @@ def main():
                 * model.freq.wvlRef * 1e9/(2*np.pi)
             ),
         })
+        # Compare the *same focal-only* kernel underlying the published
+        # 'FOCAL ANISOPLANATISM' error budget, excluding field angular
+        # and NGS anisokinetism contributions. The Hardy expression is
+        # focal-only and must not be compared with a combined kernel.
+        from p3.psfr.psfR import _anisoplanatism_zero_lag
+        cone_layers = (
+            np.asarray(model.dani_focang[0], dtype=float)
+            - np.asarray(model.dani_ang[0], dtype=float)
+        )
+        cn2_science = (
+            np.asarray(model.ao.atm.weights, dtype=float)
+            * float(model.ao.atm.r0)**(-5.0/3.0)
+            * (float(model.ao.atm.wvl)/float(model.freq.wvlRef))**2
+        )
+        cone_sf = _anisoplanatism_zero_lag(np.einsum(
+            "lxy,l->xy", cone_layers, cn2_science
+        ))
+        bridge_cone = _structure_function_wfe_bridge(
+            cone_sf, otf_dl, float(model.freq.wvlRef)
+        )
+        reported_focal = anisoplanatism_audit[
+            "otf_equivalent_focal_anisoplanatism_wfe_nm"
+        ]
+        if not np.isclose(
+            bridge_cone["strehl_equivalent_wfe_nm"],
+            reported_focal, rtol=1e-8, atol=1e-7,
+        ):
+            raise ValueError(
+                "Focal-only OTF phase-variance bridge does not match "
+                "the psfR error budget: "
+                f"{bridge_cone['strehl_equivalent_wfe_nm']:.9g} vs "
+                f"{reported_focal:.9g} nm. Inspect kernel weights and "
+                "the decomposition of focal/angular/anisokinetism."
+            )
+        anisoplanatism_audit["pupil_sf_bridge_focal_only"] = bridge_cone
+        anisoplanatism_audit["focal_hardy_to_sf_pupil_wfe_ratio"] = (
+            anisoplanatism_audit["hardy_cone_wfe_nm"]
+            / bridge_cone["pupil_piston_removed_wfe_nm"]
+            if bridge_cone["pupil_piston_removed_wfe_nm"] > 0 else None
+        )
+        anisoplanatism_audit["focal_model_conditions"] = {
+            "von_karman_outer_scale_m": float(model.ao.atm.L0),
+            "pupil": "NIRC2 numerical pupil via OTF_DL",
+            "dm_filter_requested_in_psfr": not np.isscalar(model.Hfilter),
+            "dm_filter_forwarded_to_focal_kernel": False,
+            "dm_filter_warning": (
+                "LGS/SLAO frequencyDomain does not currently forward "
+                "self.Hfilter to focal_angular_function; do not use "
+                "DM filtering to explain a discrepancy before auditing."
+            ),
+            "hardy_reference": "Kolmogorov infinite L0, analytic pupil model",
+        }
     (args.output / "anisoplanatism_diagnostics.json").write_text(
         json.dumps(anisoplanatism_audit, indent=2), encoding="utf-8"
     )
