@@ -318,6 +318,12 @@ def run_audit(geometry, outer_scales):
     ] > 0.05:
         quality_flags.append("PHYSICAL_STATIONARY_GRID_TEST_FAIL")
     if any(
+        row["physical_resampling_of_legacy_grid"][
+            "otf_weight_outside_native_support"
+        ] > 0.01 for row in results
+    ):
+        quality_flags.append("LEGACY_REMAP_INCOMPLETE_SUPPORT")
+    if any(
         row["physical_pupil_grid"][
             "otf_weight_outside_native_support"
         ] > 0.01 for row in results
