@@ -1,4 +1,4 @@
-"""Keck/NIRC2 LGS PSF-R smoke-test with scientifically labelled diagnostic plots.
+"""Keck/NIRC2 PSF-R smoke-test (LGS and NGS) with labelled diagnostics.
 
 Run from the repository root with `uv run python scripts/keck_n0013_smoke.py`.
 Fits/SAV files remain outside the repository; no uploads occur.
@@ -14,7 +14,7 @@ import tomllib
 import numpy as np
 
 
-def _plot_comparison(observed, psf_cube, destination):
+def _plot_comparison(observed, psf_cube, destination, *, dataset_label="Keck/NIRC2"):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -48,7 +48,7 @@ def _plot_comparison(observed, psf_cube, destination):
 
     fig, ax = plt.subplots(2, 2, figsize=(10, 9), constrained_layout=True)
     for a, image, title in [
-        (ax[0, 0], observed, "NIRC2 — observed binary"),
+        (ax[0, 0], observed, "NIRC2 — observed field"),
         (ax[0, 1], psf_model, "PSF-R — single-source model, K-band"),
     ]:
         im = a.imshow(np.log10(np.maximum(image, 1e-7)), vmin=-7, vmax=-1.4,
@@ -71,8 +71,9 @@ def _plot_comparison(observed, psf_cube, destination):
         a.set_ylabel("y [pixels]")
     fig.colorbar(im, ax=ax.ravel().tolist(), shrink=0.75,
                  label="log10(normalized positive flux per pixel)")
-    fig.suptitle("Keck/NIRC2 2020-12-02, LP415-20\n"
-                 "Qualitative only: binary image versus telemetry single-star PSF; no source fitting")
+    fig.suptitle(f"{dataset_label}\n"
+                 "Qualitative only: observed field versus single-star PSF; "
+                 "no source fitting or astrometric registration")
     fig.savefig(destination, dpi=160)
     plt.close(fig)
 
@@ -131,7 +132,7 @@ def _tt_sensitivity(model, observed, destination):
     observed = np.clip(observed - np.median(observed[mask]), 0, None)
     observed /= observed.sum()
     images = [observed] + spectra
-    titles = ["Observed NIRC2 binary (background subtracted)"]
+    titles = ["Observed NIRC2 field (background subtracted)"]
     for row in records:
         validity = "non-PSD!" if not row["covariance_psd"] else "PSD"
         titles.append(f"Noise subtraction: {row['alpha']:.0%} ({validity})")
@@ -141,7 +142,7 @@ def _tt_sensitivity(model, observed, destination):
         ax.set_title(title, fontsize=10)
         ax.set_xticks([])
         ax.set_yticks([])
-    fig.suptitle("Keck n0013 — tip-tilt noise sensitivity (illustrative, no binary fitting)\n"
+    fig.suptitle("Keck NIRC2 — tip-tilt noise sensitivity (illustrative, no image fitting)\n"
                  "All other PSF-R terms fixed; alpha scales the TT noise covariance")
     image_path = destination / "tiptilt_sensitivity.png"
     fig.savefig(image_path, dpi=150)
@@ -179,6 +180,24 @@ def _plot_tt_noise_spectra(diagnostics, output):
     fig.suptitle("Keck STRAP — van Dam PSD noise estimate (uncalibrated gain)")
     fig.savefig(output, dpi=150)
     plt.close(fig)
+
+
+def select_tt_jitter_mode(ao_mode, requested_mode, *, explicitly_requested=False):
+    """Select TT covariance mode by guide-star sensor, without silent fallback."""
+    if str(ao_mode).upper() == "NGS" and requested_mode == "spectral_closed_loop":
+        if explicitly_requested:
+            raise ValueError(
+                "spectral_closed_loop requires Keck LGS/STRAP telemetry. "
+                "For this NGS file use --tt-jitter-model legacy_psfr "
+                "(NGS TT units uncalibrated), or --disable-tt-jitter "
+                "for a high-order-only control."
+            )
+        return (
+            "legacy_psfr",
+            "NGS spectral TT is unsupported; using legacy_psfr for an "
+            "exploratory, uncalibrated NGS reconstruction",
+        )
+    return requested_mode, None
 
 
 def main():
@@ -236,15 +255,8 @@ def main():
         args.tt_jitter_welch_nperseg if args.tt_jitter_welch_nperseg is not None
         else jitter_config.get("welch_nperseg", tt_nperseg)
     )
-    if args.tt_sensitivity and tt_jitter_model != "legacy_psfr":
-        parser.error(
-            "--tt-sensitivity scales the historical sensor-noise subtraction; "
-            "it is only defined for --tt-jitter-model legacy_psfr"
-        )
-    print(f"[STRAP noise] method={tt_method}, band={tt_band}, Welch={tt_nperseg}",
+    print(f"[TT noise request] method={tt_method}, band={tt_band}, Welch={tt_nperseg}",
           flush=True)
-    print(f"[TT jitter OTF] method={tt_jitter_model}, mirror={tt_mirror_model}, "
-          f"Welch={tt_jitter_nperseg}", flush=True)
     for file in (args.fits, args.sav, args.calib):
         if not file.exists():
             parser.error(f"Not found: {file}")
@@ -267,6 +279,30 @@ def main():
         str(args.calib.resolve()), path_save=str(args.output.resolve()),
         cam_fov=128, nLayer=1, addNCPA=False,
     ))
+    try:
+        tt_jitter_model, model_policy_note = select_tt_jitter_mode(
+            trs.aoMode, tt_jitter_model,
+            explicitly_requested=(
+                args.tt_jitter_model == "spectral_closed_loop"
+                and not args.disable_tt_jitter
+            ),
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
+    if model_policy_note:
+        print(f"[TT jitter OTF] {model_policy_note}", flush=True)
+    if args.tt_sensitivity and tt_jitter_model != "legacy_psfr":
+        parser.error(
+            "--tt-sensitivity scales the historical sensor-noise subtraction; "
+            "it is only defined for --tt-jitter-model legacy_psfr"
+        )
+    if str(trs.aoMode).upper() == "NGS":
+        print("[NGS TT] The STRAP noise option is not used; systemDiagnosis "
+              "uses its historical NGS autocorrelation estimator. "
+              "NGS RESIDUALWAVEFRONT TT units are not independently verified.",
+              flush=True)
+    print(f"[TT jitter OTF] mode={tt_jitter_model}, mirror={tt_mirror_model}, "
+          f"Welch={tt_jitter_nperseg}", flush=True)
     # The noise estimator and the physical jitter must share a single
     # W/K/P rejection model. For legacy PSF-R, keep the historical unity
     # transfer regardless of an unused TT mirror selection.
@@ -280,6 +316,9 @@ def main():
         tt_noise_nperseg=tt_nperseg, tt_mirror_model=noise_mirror,
     ))
     noise_diagnostics = sd.trs.tipTilt.noise_estimation_diagnostics
+    effective_tt_noise_method = sd.trs.tipTilt.noise_estimation_method
+    print(f"[TT noise effective] ao_mode={trs.aoMode}, "
+          f"estimator={effective_tt_noise_method}", flush=True)
     (args.output / "tt_noise_diagnostics.json").write_text(
         json.dumps(noise_diagnostics, indent=2), encoding="utf-8",
     )
@@ -288,7 +327,7 @@ def main():
             noise_diagnostics, args.output / "tt_noise_psd.png",
         ))
     noise_cov = np.asarray(sd.trs.tipTilt.Cn_tt)
-    print(f"[STRAP noise] covariance trace={np.trace(noise_cov):.6e} m²",
+    print(f"[TT noise] covariance trace={np.trace(noise_cov):.6e} m²",
           flush=True)
     stage("configFile", lambda: configFile(sd))
     if args.disable_tt_jitter:
@@ -399,6 +438,7 @@ def main():
     )
     stage("comparison figure", lambda: _plot_comparison(
         trs.cam.image, psf, args.output / "comparison_nirc2_psfr.png",
+        dataset_label=f"Keck/NIRC2 {args.fits.name} — {trs.aoMode}",
     ))
     print("Figure:", args.output / "comparison_nirc2_psfr.png")
     if args.tt_sensitivity:
@@ -409,7 +449,16 @@ def main():
         "input_fits": str(args.fits.resolve()),
         "input_sav": str(args.sav.resolve()),
         "addNCPA": False,
-        "tt_noise_method": tt_method,
+        "ao_mode": str(trs.aoMode),
+        "tt_noise_method_requested": tt_method,
+        "tt_noise_method": effective_tt_noise_method,
+        "tt_jitter_model_requested": args.tt_jitter_model or jitter_config.get(
+            "method", "legacy_psfr"
+        ),
+        "tt_jitter_policy_note": model_policy_note,
+        "ngs_tt_units_independently_verified": (
+            False if str(trs.aoMode).upper() == "NGS" else None
+        ),
         "tt_noise_config": str(args.config.resolve()),
         "tt_jitter_covariance_method": tt_jitter_model,
         "tt_mirror_model": tt_mirror_model,
@@ -418,7 +467,7 @@ def main():
         "tt_jitter_noise_model_validated": False,
         "tt_jitter_otf_enabled": not args.disable_tt_jitter,
         "tt_jitter_ablated_for_diagnostics": bool(args.disable_tt_jitter),
-        "target": "LP415-20 (binary)",
+        "target": args.fits.name + " (observed field; multiplicity not inferred)",
         "psf_shape": list(psf.shape),
         "psf_spectral_model": (
             "Single reference-wavelength PSF shared across the three "
@@ -426,7 +475,7 @@ def main():
             "not three independently propagated chromatic PSFs"
         ),
         "psf_reference_wavelength_m": float(model.freq.wvlRef),
-        "note": "No astrometric registration or binary fit performed",
+        "note": "No source fitting or astrometric registration performed",
     }, indent=2), encoding="utf-8")
 
 
