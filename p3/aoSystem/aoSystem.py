@@ -298,6 +298,10 @@ class aoSystem():
             )
         else:
             pupil_resampling = 'legacy'
+        if self.check_config_key('telescope', 'PupilParity'):
+            pupil_parity = self.get_config_value('telescope', 'PupilParity')
+        else:
+            pupil_parity = 'native'
 
         if self.check_config_key('telescope','PathStaticOn'):
             PathStaticOn = self.get_config_value('telescope','PathStaticOn')
@@ -393,6 +397,7 @@ class aoSystem():
                              obsRatio=obsRatio,
                              pupilAngle=pupilAngle,
                              pupil_resampling=pupil_resampling,
+                             pupil_parity=pupil_parity,
                              path_pupil=path_pupil,
                              path_static_on=path_static_on,
                              zcoef_static_on=zCoefStaticOn,
