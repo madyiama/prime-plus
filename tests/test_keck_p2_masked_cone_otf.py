@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 
 from scripts.keck_p2_masked_cone_otf import (
-    load_case_geometry, _write_outputs,
+    load_case_geometry, _write_outputs, pupil_clipping_diagnostics,
     _sample_pupil,
     _cone_covariance,
     _project_modes,
@@ -255,3 +255,29 @@ def test_masked_cone_report_writes_flattened_numpy_products(tmp_path):
         np.testing.assert_array_equal(
             np.load(target, allow_pickle=False), array
         )
+
+
+def test_rotated_pupil_clipping_report_separates_tiny_from_material_overshoots():
+    """Thousands of tiny spline negatives need not be physically important."""
+    raw = np.ones((100, 100), dtype=float)
+    raw[:43, :] = -1e-12    # 4300 out-of-range pixels, negligible flux
+    raw[90, 90] = 1.0 + 1e-12
+    report = pupil_clipping_diagnostics(raw)
+    assert report["out_of_range_pixel_count"] == 4301
+    assert report["out_of_range_pixel_count_above_1e-8"] == 0
+    assert report["material_pupil_clipping_warning"] is False
+    assert abs(report["relative_intensity_change_from_clipping"]) < 1e-9
+
+    raw[90, 90] = 3.0
+    report_material = pupil_clipping_diagnostics(raw)
+    assert report_material["out_of_range_pixel_count_above_1e-2"] == 1
+    assert report_material["material_pupil_clipping_warning"] is True
+    assert report_material["maximum_amplitude_clipping_change"] == 2.0
+    assert report_material["relative_intensity_change_from_clipping"] < 0
+
+
+def test_rotated_pupil_clipping_requires_finite_2d_data():
+    with pytest.raises(ValueError, match="finite 2-D"):
+        pupil_clipping_diagnostics(np.array([1.0]))
+    with pytest.raises(ValueError, match="finite 2-D"):
+        pupil_clipping_diagnostics(np.array([[np.nan]]))
