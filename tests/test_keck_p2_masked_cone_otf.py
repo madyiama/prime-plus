@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 
 from scripts.keck_p2_masked_cone_otf import (
-    load_case_geometry,
+    load_case_geometry, _write_outputs,
     _sample_pupil,
     _cone_covariance,
     _project_modes,
@@ -227,3 +227,31 @@ def test_completed_p2_case_loader_transfers_hardy_reference_to_prototype(tmp_pat
     )
     with pytest.raises(ValueError, match="Missing hardy_cone_wfe_nm"):
         load_case_geometry(case)
+
+
+def test_masked_cone_report_writes_flattened_numpy_products(tmp_path):
+    """Regression for real CLI AttributeError: ndarray has no .items()."""
+    g = _geometry()
+    g["pupil_source"] = "circle"
+    sampled = _sample_pupil(g["diameter_m"], 9, "circle")
+    metrics, products = evaluate_configuration(g, sampled, np.inf)
+    flattened = {
+        f"n9_L0inf_{mode}_{key}": array
+        for mode, arrays in products.items()
+        for key, array in arrays.items()
+    }
+    assert flattened and all(
+        isinstance(array, np.ndarray) for array in flattened.values()
+    )
+    output = tmp_path / "masked_cone_results"
+    summary = {"evaluations": [metrics]}
+    _write_outputs(summary, flattened, output)
+    assert (output / "masked_cone_otf_audit.json").is_file()
+    assert (output / "masked_cone_otf_audit.csv").is_file()
+    assert (output / "masked_cone_otf_audit.png").is_file()
+    for name, array in flattened.items():
+        target = output / f"{name}.npy"
+        assert target.is_file()
+        np.testing.assert_array_equal(
+            np.load(target, allow_pickle=False), array
+        )
