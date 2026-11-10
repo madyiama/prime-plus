@@ -138,3 +138,64 @@ def test_LGS_method_rejects_missing_instrument_without_implicit_fallback():
     sd = NS(trs=NS(aoMode="NGS"))
     with pytest.raises(ValueError, match="requires Keck LGS"):
         estimate_r0(sd, method="jolissaint")
+
+
+
+def test_keck_2018_nominal_valid_actuator_mask_is_exactly_320_with_correct_if_scale():
+    # This fixture reproduces the geometry of Keck's 21x21 DM, where
+    # 349 nominally valid actuators become 320 after excluding 5
+    # central + 24 edge ones, independently of influence peak positions.
+    n = 25
+    n_dm = 21
+    pitch = 0.5625
+    xy = np.linspace(-10*pitch, 10*pitch, n)
+    yy, xx = np.meshgrid(xy, xy, indexing="ij")
+    dmxy = (np.arange(n_dm)-10)*pitch
+    ay, ax = np.meshgrid(dmxy, dmxy, indexing="ij")
+    actual_radius = np.hypot(ax, ay)
+    valid = actual_radius <= 10.54*pitch
+    assert np.sum(valid) == 349
+    # Smooth nonzero influences deliberately overlap strongly.
+    IF = np.exp(
+        -(
+            (xx.ravel()[:, None]-ax.ravel()[None, :])**2
+            +(yy.ravel()[:, None]-ay.ravel()[None, :])**2
+        )/(2*0.38**2)
+    )
+    out = modified_dm_projection(
+        IF, 10.5, n, j_start=7, j_stop=14,
+        dm_pitch_m=pitch, valid_actuators=valid,
+    )
+    assert len(out["actuator_indices"]) == 320
+    assert out["valid_actuators_provided"] is True
+    assert out["dm_influence_extent_m"] == pytest.approx(11.25)
+    assert out["pupil_sample_pitch_m"] == pytest.approx(11.25/(n-1))
+    assert out["pixels_per_dm_pitch"] == pytest.approx((n-1)/20)
+    assert out["analysis_outer_diameter_m"] == pytest.approx(9.0)
+
+    bad_valid = valid.copy()
+    bad_valid[10, 13] = False
+    with pytest.raises(ValueError, match="invalid DM actuators"):
+        modified_dm_projection(
+            IF, 10.5, n, j_start=7, j_stop=14,
+            dm_pitch_m=pitch, valid_actuators=bad_valid,
+        )
+
+
+def test_physical_phase_structure_sampling_changes_reference_model():
+    n = 11
+    y, x = np.indices((n, n), dtype=float)
+    probe = (x-(n-1)/2)[None, :, :]
+    probe -= probe.mean(axis=(1, 2), keepdims=True)
+    wrong = _model_modal_variance(
+        probe, 9.0, 31.0, 10.5
+    )
+    correct = _model_modal_variance(
+        probe, 9.0, 31.0, 10.5,
+        pixel_pitch_m=11.25/(n-1)
+    )
+    assert correct[0] > wrong[0] > 0
+    with pytest.raises(ValueError, match="grid pitch"):
+        _model_modal_variance(
+            probe, 9.0, 31.0, 10.5, pixel_pitch_m=0
+        )
