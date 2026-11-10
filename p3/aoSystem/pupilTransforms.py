@@ -11,7 +11,8 @@ import numpy as np
 from scipy.ndimage import map_coordinates
 
 
-def resample_binary_pupil(mask, resolution, rotation_deg=0.0, supersample=4):
+def resample_binary_pupil(mask, resolution, rotation_deg=0.0, supersample=4,
+                          parity="native"):
     """Rotate (scipy-positive angle) and area-downsample an archived binary mask.
 
     Source and destination grids span the same square physical field. Samples
@@ -33,6 +34,12 @@ def resample_binary_pupil(mask, resolution, rotation_deg=0.0, supersample=4):
         raise ValueError("Pupil contains no open samples")
     if not np.all((np.abs(arr) < 1e-8) | (np.abs(arr-1.0) < 1e-8)):
         raise ValueError("Physical binary sampling requires a 0/1 FITS pupil")
+    if parity not in ("native", "flip_x", "flip_y"):
+        raise ValueError("Pupil parity must be native, flip_x or flip_y")
+    if parity == "flip_x":
+        arr = arr[:, ::-1]
+    elif parity == "flip_y":
+        arr = arr[::-1, :]
     native_side = arr.shape[0]
     output_coords = (np.arange(n*s, dtype=float)+0.5)/s - n/2
     # Coordinates in pixels of the original, same-square-field image.
@@ -68,6 +75,12 @@ def pupil_sampling_diagnostics(native, sampled, angle_deg, supersample):
         "fractional_amplitude_pixel_count": int(np.count_nonzero((sampled > 0) & (sampled < 1))),
         "input_binary_area_fraction": float(np.mean(native)),
         "output_mean_amplitude": float(np.mean(sampled)),
+        "relative_occupancy_area_change": float(
+            np.mean(sampled)/np.mean(native)-1.0
+        ),
+        "possible_frame_truncation": bool(
+            abs(np.mean(sampled)/np.mean(native)-1.0) > 0.01
+        ),
         "output_mean_intensity_transmission": float(np.mean(sampled**2)),
         "zero_angle_parity_calibrated": False,
         "warning": "Pixel amplitude is a subpixel area average; angle zero and camera handedness must be calibrated independently",
