@@ -442,6 +442,81 @@ Production `focal_angular_function` remains on its historical
 grid by default; new `pupil_grid_mode`/`output_grid` kwargs are
 explicitly audit-only.
 
+### 2.10. P2 resolution: Hardy removes BOTH piston and tip-tilt
+
+**This corrects the earlier sections 2.3-2.9, which mistakenly compared
+different modal budgets.** Hardy's 0.452 coefficient is **NOT a
+piston-only** focal-cone error. Sasiela, *Electromagnetic Wave
+Propagation in Turbulence* (2007), section 6.13, equations 6.196 and
+6.197, distinguishes:
+
+- Piston-removed cone phase variance, to the same analytical order:
+  \`(D/r0)^(5/3) Σ w_l [0.5*g_l^(5/3)-0.0835*g_l^2]/0.423\`
+- Piston-AND-tilt-removed cone phase variance (Hardy/PRIME):
+  \`(D/r0)^(5/3) Σ w_l [0.5*g_l^(5/3)-0.452*g_l^2]/0.423\`.
+
+Here \`g_l=h_l/H_LGS\` and \`r0\` is defined at the science wavelength
+and line-of-sight, consistently with the layer weights. The source
+formula 6.196 has -0.167 inside a half prefactor; 6.197 has -0.903,
+which yields -0.0835 and -0.4515, respectively. The other terms are
+identical to the order of the approximation.
+
+**Direct independent numerical check**: the new
+\`scripts/keck_p2_cone_modal_reference.py\` evaluates
+\`delta_phi(r)=phi(r)-phi((1-g)r)\`, using \`D_phi(rho)=6.88
+(|rho|/r0)^(5/3)\` and explicitly the 2-point phase covariance on
+a sampled circular pupil. It then projects the covariance with the
+weighted orthogonal projector onto {piston,x-tilt,y-tilt}. It does NOT
+call \`matrix_to_map\`, \`interpolateSupport\` or use a science PSF.
+
+For **n0120** (D=10.5 m, lambda_ref=1.53µm, r0=0.4391188896 m,
+H_LGS=122252.296 m) with 43x43 Cartesian sampling and a **circular
+mask**:
+
+| WFE, Kolmogorov L0=infinity | 1 equivalent layer | 7 MASS-DIMM layers |
+|---|---:|---:|
+| Direct covariance, piston only removed | 377.70 nm | 375.02 nm |
+| Direct covariance, piston and tilt removed | **313.15 nm** | **295.59 nm** |
+| Hardy analytical, piston and tilt removed | 312.42 nm | 295.01 nm |
+
+Thus independently projected Flicker / Kolmogorov covariance agrees
+with Hardy within **0.24% / 0.20% RMS**, without tuned coefficients.
+For the 1-layer case, the independent piston-only analytical
+approximation yields 379.24 nm, also within about 0.4% of the direct
+piston-only covariance.
+
+The discrete **full square** grid instead of a circular pupil gives,
+for the 1-layer case at 43 points, approximately 435.5 nm with piston
+only removed, showing a **separate** mask/averaging bias. At the same
+L0=infinity the production legacy index-sampled SF gives 258.7 nm
+and the physical-pupil-grid/square-pair \`matrix_to_map\` experiment
+gives 394.9 nm. Neither numerical figure is directly comparable to
+Hardy's *tilt-removed* result until the same modal projector and
+illuminated pupil-pair weights are used.
+
+**Consequences**:
+- The P2 discrepancy is now diagnosed as a mismatch in modal
+  conventions (piston vs piston+tilt), mixed with square-grid
+  averaging and legacy physical-lag interpolation.
+- Do NOT apply a uniform factor to the WFE, Dphi or OTF to fix this.
+- In a scientifically final Keck LGS model, verify how the independent
+  NGS/STRAP TT loop and LGS HO reconstructor divide the modal
+  contribution. A focal-cone TT residual must not be counted again
+  as though it were independent of the separately calibrated
+  TT kernel.
+- Removing tilt from a **single scalar WFE after** SF computation is
+  not a replacement for projecting the nonstationary covariance
+  (or phase screens) before OTF formation.
+- Validate the projected cone OTF on Keck's true segmented pupil and
+  compare with the ideal circular-pupil reference before modifying
+  the production \`focal_angular_function\`. P2 physical integration
+  remains open pending that instrument-specific test, though the
+  core Hardy coefficient discrepancy is resolved.
+
+Reference: Sasiela, *Electromagnetic Wave Propagation in Turbulence*,
+2nd edition (2007), Sec. 6.13 eqs. 6.196-6.197;
+Beltramo-Martin et al., *PRIME*, MNRAS 487, 5450 (2019), Eq. 12.
+
 ## 3. Keck II NIRC2 pupil angle
 
 KAON 1160 (Ragland, 2017), equations (1) and (2):
