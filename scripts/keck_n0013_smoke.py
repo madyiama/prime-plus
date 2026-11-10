@@ -861,6 +861,20 @@ def main():
         (args.output / "p1_r0_estimator_comparison.json").write_text(
             json.dumps(seeing, indent=2), encoding="utf-8"
         )
+        from p3.telemetry.seeingEstimator import (
+            assess_jolissaint_spatial_convergence
+        )
+        convergence = assess_jolissaint_spatial_convergence(seeing)
+        (args.output / "p1_r0_spatial_convergence.json").write_text(
+            json.dumps(convergence, indent=2), encoding="utf-8"
+        )
+        print(
+            f"[P1 Jolissaint spatial] "
+            f"status={convergence['status']}, "
+            f"relative r0 range={convergence.get('r0_relative_range')}, "
+            f"L0 boundaries={convergence.get('L0_at_grid_boundary')}",
+            flush=True,
+        )
         print(
             "[P1-only] Complete; no PSF reconstruction, no fitting of "
             "science image, no changes to production r0/L0 estimator. "
