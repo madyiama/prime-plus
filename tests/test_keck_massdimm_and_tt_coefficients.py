@@ -64,16 +64,34 @@ def test_tt_kernel_noll_and_legacy_difference_is_traceable_factor_16():
     model = _minimal_tt_psfr_model()
     # Coefficients in RMS-normalized Noll-Z2/Z3 OPD units, not angle.
     cov_opd = np.diag([1e-14, 2e-14])
+    # Independently derive the physical angle-domain kernel before
+    # exercising the historical 1/16 comparison switch.  This catches
+    # a local manual removal of the Noll factor: a ratio test alone can
+    # pass even when BOTH kernel variants are scaled incorrectly.
+    cov_theta = cov_opd * (4.0/10.5)**2
+    baseline_u = model.freq.sampRef/2 * model.freq.U_
+    baseline_v = model.freq.sampRef/2 * model.freq.V_
+    expected_noll = (2*np.pi*10.5/2.2e-6)**2 * (
+        cov_theta[0,0]*baseline_u**2
+        + cov_theta[1,1]*baseline_v**2
+    )
     model.tt_kernel_dphi_multiplier_vs_noll = 1.0
     dphi_noll = model.jitter_phase_structure_function(Ctt=cov_opd)
-    model.tt_kernel_dphi_multiplier_vs_noll = 1.0 / 16.0
-    dphi_legacy = model.jitter_phase_structure_function(Ctt=cov_opd)
-    np.testing.assert_allclose(dphi_noll, 16.0*dphi_legacy, atol=1e-14, rtol=1e-13)
-    assert np.max(dphi_noll) > 0
-    # An independent angular covariance must give the physical formula:
-    cov_theta = cov_opd * (4.0/10.5)**2
-    expected = (2*np.pi*10.5/2.2e-6)**2 * (
-        cov_theta[0,0]*model.freq.U_**2
-        + cov_theta[1,1]*model.freq.V_**2
+    np.testing.assert_allclose(
+        dphi_noll, expected_noll, atol=1e-13, rtol=1e-13,
+        err_msg=(
+            "noll_angular has an unexpected 1/16 factor: check local edits "
+            "in psfR.py/tipTiltGeometry.py. To compare the original P3 "
+            "normalization, select --tt-kernel-convention legacy_unscaled_opd "
+            "instead of manually changing the physical kernel."
+        ),
     )
-    np.testing.assert_allclose(dphi_noll, expected, atol=1e-13, rtol=1e-13)
+    assert np.max(dphi_noll) > 0
+    model.tt_kernel_dphi_multiplier_vs_noll = 1.0/16.0
+    dphi_legacy = model.jitter_phase_structure_function(Ctt=cov_opd)
+    np.testing.assert_allclose(
+        dphi_legacy, expected_noll/16.0, atol=1e-14, rtol=1e-13
+    )
+    np.testing.assert_allclose(
+        dphi_noll, 16.0*dphi_legacy, atol=1e-14, rtol=1e-13
+    )
