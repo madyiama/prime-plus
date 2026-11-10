@@ -239,6 +239,7 @@ def samplingFilterProfile(path_filter, hdr, nWvl=3, thresold=0.9,
     metadata = {
         'instrument': instName,
         'filter_name': filter_name,
+        'composite_filter': hdr.get('FILTER'),
         'source': None,
         'calibrated_transmission_curve_available': False,
         'flat_transmission_approximation': False,
@@ -246,6 +247,16 @@ def samplingFilterProfile(path_filter, hdr, nWvl=3, thresold=0.9,
     try:
         wvl_all, tr_all = getFilterProfile(path_filter, filter_name)
     except FileNotFoundError as exc:
+        if not Path(path_filter).is_dir():
+            raise FileNotFoundError(
+                f"NIRC2 filter calibration directory does not exist: {path_filter}"
+            ) from exc
+        if str(filter_name).upper().startswith(('CLEAR', 'OPEN', 'PK')):
+            raise ValueError(
+                f"No active NIRC2 science passband identified; "
+                f"inner/outer filter wheels: "
+                f"{hdr.get('FWINAME')!r}/{hdr.get('FWONAME')!r}"
+            ) from exc
         if instName != 'NIRC2':
             raise ValueError(
                 f"Missing {instName!r} filter curve for {filter_name!r}; "
