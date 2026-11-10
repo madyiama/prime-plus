@@ -190,3 +190,63 @@ def test_atmosphere_reference_wavelength_change_preserves_all_layer_r0_scales():
         [atm.slab(i).r0 for i in range(atm.nL)],
         original_layers, rtol=1e-14,
     )
+
+
+def test_modal_covariance_small_negative_psd_projection_is_explicit_and_audited():
+    """NGS-scale small-negative covariance is repaired only on opt-in."""
+    import pytest
+
+    y, x = np.mgrid[-1:1:8j, -1:1:8j]
+    modes = np.column_stack((x.ravel(), y.ravel()))
+    pupil = np.ones((8, 8))
+    eigen_min, eigen_max = -3.164060e-3, 3.181067
+    matrix = np.diag([eigen_max, eigen_min])
+
+    with pytest.raises(ValueError, match="positive-semidefinite"):
+        modes2Otf(matrix, modes, pupil, n_otf=16, samp=2)
+
+    details = {}
+    with pytest.warns(RuntimeWarning, match="exploratory PSD regularization"):
+        otf, sf = modes2Otf(
+            matrix, modes, pupil, n_otf=16, samp=2,
+            covariance_psd_policy="small_negative",
+            covariance_diagnostics=details,
+        )
+    assert details["projection_applied"] is True
+    assert details["negative_mode_count"] == 1
+    assert details["negative_mode_fraction_of_lambda_max"] < 0.005
+    assert details["negative_trace_fraction_of_positive_mass"] < 0.005
+    assert details["model_validated_by_projection"] is False
+    assert np.all(np.isfinite(otf))
+    assert np.all(np.isfinite(sf))
+    assert otf.max() == pytest.approx(1.0)
+
+
+def test_modal_covariance_projection_rejects_large_individual_negative_mode():
+    import pytest
+
+    y, x = np.mgrid[-1:1:8j, -1:1:8j]
+    modes = np.column_stack((x.ravel(), y.ravel()))
+    with pytest.raises(ValueError, match="positive-semidefinite"):
+        modes2Otf(
+            np.diag([1.0, -0.02]), modes, np.ones((8, 8)),
+            n_otf=16, samp=2,
+            covariance_psd_policy="small_negative",
+        )
+
+
+def test_modal_covariance_projection_rejects_many_tiny_negative_modes():
+    """Cumulative negative mass must not be hidden by small eigenvalue sizes."""
+    import pytest
+
+    y, x = np.mgrid[-1:1:8j, -1:1:8j]
+    modes = np.column_stack(
+        (x.ravel(), y.ravel(), (x*y).ravel(), (x**2-y**2).ravel())
+    )
+    covariance = np.diag([1.0, -0.004, -0.004, -0.004])
+    with pytest.raises(ValueError, match="negative_trace_fraction"):
+        modes2Otf(
+            covariance, modes, np.ones((8, 8)),
+            n_otf=16, samp=2,
+            covariance_psd_policy="small_negative",
+        )
