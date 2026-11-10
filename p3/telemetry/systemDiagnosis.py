@@ -77,6 +77,55 @@ def autocorrelation_noise_covariance(samples, nshift=1, *, periodic=False):
     return 0.5 * (delta.T @ delta) / len(delta)
 
 
+def interpolate_forward_residual_no_wrap(residual, delay_frames):
+    """Interpolate r(t + delay) on the *time* axis, without circular wrapping.
+
+    The caller's historical P3 convention uses future residual samples
+    relative to DM commands (negative roll). Keep that convention explicitly
+    until the RTC timing signs are independently verified. A time sample is
+    valid only if all interpolation neighbours belong to this observation.
+
+    Returns a full-size aligned array and a boolean mask of usable frames.
+    This is a temporal operation: the actuator column order is invariant.
+    """
+    values = np.asarray(residual, dtype=float)
+    delay = float(delay_frames)
+    if values.ndim != 2 or not np.all(np.isfinite(values)):
+        raise ValueError("Pseudo-open-loop residual must be a finite 2-D array")
+    if not np.isfinite(delay) or delay < 0:
+        raise ValueError("Pseudo-open-loop delay must be finite and non-negative")
+    n_frames = values.shape[0]
+    lo = int(np.floor(delay))
+    alpha = delay - lo
+    # Treat exact integers as one timestamp, avoiding an unnecessary
+    # additional invalid frame at the far end.
+    if np.isclose(alpha, 0.0, atol=1e-12, rtol=0.0):
+        alpha = 0.0
+    index = np.arange(n_frames, dtype=np.int64) + lo
+    end_index = index + (1 if alpha else 0)
+    valid = (index >= 0) & (end_index < n_frames)
+    if np.count_nonzero(valid) < 2:
+        raise ValueError(
+            f"Only {np.count_nonzero(valid)} pseudo-open-loop frames remain "
+            f"with delay={delay:g} over {n_frames} samples"
+        )
+    aligned = np.zeros_like(values)
+    aligned[valid] = (1.0 - alpha) * values[index[valid]]
+    if alpha:
+        aligned[valid] += alpha * values[index[valid] + 1]
+    return aligned, valid
+
+
+def fried_seeing_arcsec(r0_m, wavelength_m):
+    """Long-exposure Kolmogorov seeing: 0.976 lambda/r0, in arcsec."""
+    r0_m = float(r0_m)
+    wavelength_m = float(wavelength_m)
+    if not (np.isfinite(r0_m) and r0_m > 0
+            and np.isfinite(wavelength_m) and wavelength_m > 0):
+        raise ValueError("r0 and wavelength must be finite positive values")
+    return 0.976 * rad2arc * wavelength_m / r0_m
+
+
 class systemDiagnosis:
 
     def __init__(self, trs, noiseMethod='autocorrelation', nshift=1, nfit=2,
@@ -128,7 +177,9 @@ class systemDiagnosis:
         self.trs.atm.tau0_tel = tau0
         self.trs.atm.v0_tel = v0
         self.trs.atm.dr0_tel = dr0
-        self.trs.atm.dseeing_tel= rad2arc * dr0 * self.trs.atm.wvl/r0**2
+        self.trs.atm.dseeing_tel = (
+            0.976 * rad2arc * dr0 * self.trs.atm.wvl / r0**2
+        )
         self.trs.atm.dL0_tel = dL0
         self.trs.atm.dtau0_tel= dtau0
         self.trs.atm.dv0_tel = dv0
@@ -136,7 +187,9 @@ class systemDiagnosis:
         # update the atmosphere structure
         self.trs.atm.r0 = r0
         self.trs.atm.L0 = L0
-        self.trs.atm.seeing = rad2arc * self.trs.atm.wvl/r0
+        self.trs.atm.seeing = fried_seeing_arcsec(
+            r0, self.trs.atm.wvl
+        )
         if len(self.trs.atm.Cn2Weights) > 1:
             vm = FourierUtils.eqLayers(np.array(self.trs.atm.Cn2Weights),np.array(self.trs.atm.wSpeed),nEqLayers=1)[1]
             self.trs.atm.wSpeed = list(v0 * np.array(self.trs.atm.wSpeed)/vm)
@@ -434,17 +487,32 @@ class systemDiagnosis:
 
         # ----  RECONSTRUCTING THE COEFFICIENTS
         # open-loop reconstruction
-        dt = self.trs.holoop.lat * self.trs.holoop.freq
-        dt_up = int(np.ceil(dt))
-        dt_lo = int(np.floor(dt))
-        self.trs.dm.com_delta = (1-dt_up+dt)*np.roll(self.trs.rec.res,(-dt_up,0)) + (1-dt+dt_lo)*np.roll(self.trs.rec.res,(-dt_lo,0))
-        self.trs.dm.u_ol = self.trs.dm.com + self.trs.dm.com_delta
-        self.trs.dm.u_ol -= np.mean(self.trs.dm.u_ol,axis=1)[:,np.newaxis]
+        dt = float(self.trs.holoop.lat * self.trs.holoop.freq)
+        self.trs.dm.com_delta, valid_frames = interpolate_forward_residual_no_wrap(
+            self.trs.rec.res, dt
+        )
+        # Use the SAME valid time window in both measurements. Do not allow
+        # an artificial last-to-first residual transition, and do not use
+        # flattened roll which mixes successive actuator columns.
+        if self.trs.dm.com.shape != self.trs.rec.res.shape:
+            raise ValueError("DM commands and reconstructed residual have different shapes")
+        self.trs.dm.u_ol = (
+            self.trs.dm.com[valid_frames] + self.trs.dm.com_delta[valid_frames]
+        )
+        self.trs.dm.u_ol -= np.mean(self.trs.dm.u_ol, axis=1)[:, np.newaxis]
+        self.trs.dm.pseudo_ol_delay_frames = dt
+        self.trs.dm.pseudo_ol_frames_used = int(valid_frames.sum())
+        self.trs.dm.pseudo_ol_frames_dropped = int((~valid_frames).sum())
+        self.trs.dm.pseudo_ol_alignment = 'future_residual_linear_no_wrap'
+        self.trs.dm.pseudo_ol_sign_independently_verified = False
 
-        # reconstructing the amplitude of Zernike coefficients
-        self.trs.wfs.coeffs = np.dot(self.trs.mat.u2z, self.trs.dm.u_ol[:,self.actuInPupil].T)
-        self.trs.wfs.coeffs -= np.mean(self.trs.wfs.coeffs, axis=1)[:,np.newaxis]
-        Cz_ho = np.dot(self.trs.wfs.coeffs,self.trs.wfs.coeffs.T)/self.trs.wfs.nExp
+        # Reconstruct Zernike statistics from the aligned, valid frames.
+        self.trs.wfs.coeffs = np.dot(
+            self.trs.mat.u2z, self.trs.dm.u_ol[:, self.actuInPupil].T
+        )
+        self.trs.wfs.coeffs -= np.mean(self.trs.wfs.coeffs, axis=1)[:, np.newaxis]
+        Cz_ho = (self.trs.wfs.coeffs @ self.trs.wfs.coeffs.T
+                 / self.trs.dm.pseudo_ol_frames_used)
 
         #tip-tilt case
         if self.trs.aoMode == 'LGS':
