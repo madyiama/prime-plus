@@ -444,6 +444,19 @@ class psfR:
 
     def phase_structure_function(self, r0, x0_dphi, Cn2=None):
 
+        # A multi-layer P3 forward vector starts with one turbulence
+        # strength per layer (w_l*r0**(-5/3)), followed by gho and gtt.
+        # Do not silently interpret missing gains as zero, nor fail with
+        # an opaque IndexError after an expensive multi-layer setup.
+        if (x0_dphi is None or len(x0_dphi) != 2
+                or not np.all(np.isfinite(x0_dphi))):
+            raise ValueError(
+                "PSF-R requires two finite HO/TT gains [gho, gtt] after "
+                "the atmospheric parameters: use [r0, gho, gtt] for one "
+                "layer or [w_i*r0**(-5/3) for each layer, gho, gtt] "
+                "for multiple atmospheric/reconstructed layers."
+            )
+
         # On-axis phase structure function
         SF = x0_dphi[0]*self.dphi_ao\
            + x0_dphi[1]*self.dphi_tt \
