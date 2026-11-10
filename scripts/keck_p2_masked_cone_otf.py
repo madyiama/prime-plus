@@ -546,8 +546,25 @@ def main():
                 f"{metrics['piston_and_tilt_removed']['hardy_reference_wfe_nm']:.2f}nm",
                 flush=True,
             )
+    # This is a benchmark against the existing P3 *piston-only*
+    # result, not a claim that piston+tilt should be inserted into the
+    # full closed-loop OTF before calibrating the HO/STRAP modal split.
+    legacy = g["aniso"].get("pupil_sf_bridge_focal_only", {})
     summary = {
         "source_case": str(case.resolve()),
+        "legacy_p3_focal_only_reference": {
+            "model": "P3 focal SF, historical square-grid averaging",
+            "pupil_sf_wfe_nm": legacy.get(
+                "pupil_piston_removed_wfe_nm"
+            ),
+            "strehl_equivalent_wfe_nm": legacy.get(
+                "strehl_equivalent_wfe_nm"
+            ),
+            "comparability_warning": (
+                "P3 historical focal SF is not the same modal/pupil "
+                "definition as the new piston+tilt removed Keck model."
+            ),
+        },
         "pupil_provenance": provenance,
         "pupil_sampling": (
             "grid centers span [-D/2,D/2] with pitch D/n, "
