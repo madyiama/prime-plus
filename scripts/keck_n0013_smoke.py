@@ -272,6 +272,51 @@ def _ho_noise_endpoint_audit(trs):
     }
 
 
+def _ho_covariance_preflight(trs):
+    """Analyze HO subtraction before psfR, including on strict-mode failures.
+
+    Eigenvalue ratios are invariant to the positive (2*pi/lambda)^2 factor.
+    Diagnostics use actuator OPD m^2, not phase rad^2.
+    """
+    commands = np.asarray(trs.dm.com, dtype=float)
+    noise = np.asarray(trs.wfs.Cn_ao, dtype=float)
+    gain = float(np.asarray(trs.holoop.gain).reshape(-1)[0])
+    if not np.isfinite(gain) or gain == 0 or commands.ndim != 2 or len(commands) < 2:
+        raise ValueError("Cannot evaluate HO covariance: invalid loop gain or commands")
+    diffs = np.diff(commands, axis=0) / gain
+    measured = diffs.T @ diffs / len(diffs)
+    subtracted = 0.5 * (measured - noise + (measured - noise).T)
+    eig = np.linalg.eigvalsh(subtracted)
+    tolerance = max(1e-12 * float(np.max(np.abs(eig))), 1e-24)
+    negatives = -eig[eig < -tolerance]
+    positives = eig[eig > 0]
+    largest = float(positives.max()) if len(positives) else 0.0
+    pos_mass = float(np.sum(positives))
+    worst = float(np.max(negatives)) / largest if len(negatives) and largest > 0 else 0.0
+    mass = float(np.sum(negatives)) / pos_mass if pos_mass > 0 else 0.0
+    return {
+        "ao_mode": str(trs.aoMode),
+        "units": "OPD m^2 (not phase radians^2)",
+        "commands_frames": int(len(commands)),
+        "ho_loop_gain": gain,
+        "command_covariance_trace_m2": float(np.trace(measured)),
+        "noise_covariance_trace_m2": float(np.trace(noise)),
+        "subtracted_covariance_trace_m2": float(np.trace(subtracted)),
+        "lambda_min_m2": float(eig.min()),
+        "lambda_max_m2": float(eig.max()),
+        "negative_mode_count": int(len(negatives)),
+        "negative_mode_fraction_of_lambda_max": worst,
+        "negative_trace_fraction_of_positive_mass": mass,
+        "tiny_negative_policy_would_pass": bool(
+            worst <= 1e-5 and mass <= 1e-5
+        ),
+        "scientific_status": (
+            "Diagnostic of finite-sample covariance subtraction, not an "
+            "independent validation of the WFS noise estimator"
+        ),
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fits", type=Path, required=True)
@@ -423,6 +468,14 @@ def main():
     print(f"[TT noise] covariance trace={np.trace(noise_cov):.6e} m²",
           flush=True)
     stage("configFile", lambda: configFile(sd))
+    ho_preflight = _ho_covariance_preflight(sd.trs)
+    (args.output / "ho_covariance_preflight.json").write_text(
+        json.dumps(ho_preflight, indent=2), encoding="utf-8"
+    )
+    print("[HO covariance preflight] worst negative fraction=",
+          ho_preflight["negative_mode_fraction_of_lambda_max"],
+          "negative trace fraction=",
+          ho_preflight["negative_trace_fraction_of_positive_mass"], flush=True)
     if str(trs.aoMode).upper() == "NGS":
         ho_endpoint = _ho_noise_endpoint_audit(sd.trs)
         (args.output / "ho_noise_endpoint_audit.json").write_text(
