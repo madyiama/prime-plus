@@ -153,6 +153,40 @@ and does not establish the accuracy of the underlying focal-angular
 spatial covariance interpolation away from zero baseline. Separate
 synthetic tests must check the anisoplanatic SF shape under finite L0.
 
+
+### 2.5. P2 n0120 user-Mac confirmation (1 vs 7 layers)
+
+The user reran the actual n0120 LGS science FITS and TRS SAV with the
+zero-lag SF normalization patch at **identical Git SHA**
+`5718a88b62c6c00f3003f0c31472c8c7b25bca71`, and no comparison flags
+or changed physical parameters (`layer_comparison(2).json`).
+
+| Measured quantity | 1 equivalent layer | 7 MASS-DIMM layers |
+|---|---:|---:|
+| Hardy cone RMS OPD | 312.4173 nm | 295.0075 nm |
+| OTF-equivalent focal anisoplanatism | 236.4439 nm | 228.0546 nm |
+| Total Maréchal-equivalent WFE | 333.2224 nm | 327.2942 nm |
+| PSF-R OTF Strehl | 15.90305% | 17.12914% |
+| Flux-normalized image peak | 0.01005435 | 0.01082951 |
+| Anisoplanatic SF at zero lag | 0 rad² | 0 rad² |
+| Unnormalized anisoplanatic zero-lag offset | 0.30433992 rad² | 0.17625385 rad² |
+
+`SR_OTF_7/SR_OTF_1 = 1.0770978565` and
+`normalized_peak_7/normalized_peak_1 = 1.0770978707`,
+a relative difference of about 1.3e-8. The corrected WFE decrease is
+8.3893 nm for the focal term, compared with Hardy's 17.4098 nm;
+these are different estimators and do not have to be numerically equal.
+Normalized PSF morphology does not change on this DC-only correction,
+but the seven-layer peak remains **7.71%** higher than one-layer,
+with total variation distance **0.0530756** and additional encircled
+energy of **5.224 percentage points** at 16 pixels.
+
+**P2 numerical implementation status for n0120: validated against real
+Keck telemetry and controlled 1/7 contrast.** Full physical validation
+across other LGS geometries, finite-`L0` angular-covariance treatment,
+and absolute NIRC2 science-image calibration remain open. This case
+is not a reason to tune `0.452` or another analytical coefficient.
+
 ## 3. Keck II NIRC2 pupil angle
 
 KAON 1160 (Ragland, 2017), equations (1) and (2):
