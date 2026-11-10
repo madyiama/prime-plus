@@ -604,6 +604,15 @@ def main():
             "NOT independently calibrated for n0120"
         ),
     )
+    parser.add_argument(
+        "--jolissaint-grid-sizes", default=None,
+        help=(
+            "P1-only spatial convergence: comma-separated pixel axes, "
+            "e.g. '100,201'. The native 100x100 DM IF is used at 100, "
+            "higher resolutions REGENERATE the calibrated Keck IF. "
+            "261 corresponds to 13 samples per actuator pitch."
+        ),
+    )
     args = parser.parse_args()
     if args.r0_method != "zernike" and not args.p1_only:
         parser.error("--r0-method jolissaint/both requires --p1-only")
@@ -811,21 +820,44 @@ def main():
             else (args.r0_method,)
         )
         seeing = {}
+        native_resolution = int(sd.trs.tel.resolution)
+        grid_sizes = (
+            [native_resolution] if args.jolissaint_grid_sizes is None
+            else [int(s.strip()) for s in
+                  args.jolissaint_grid_sizes.split(",")]
+        )
+        if (not grid_sizes or len(grid_sizes) != len(set(grid_sizes))
+                or any(n < 51 or n > 301 or
+                       (n % 2 != 1 and n != native_resolution)
+                       for n in grid_sizes)):
+            parser.error(
+                "--jolissaint-grid-sizes must be unique odd axes "
+                "in [51,301], or native resolution 100"
+            )
         for name in methods:
-            seeing[name] = stage(
-                f"P1 r0 estimator [{name}]",
-                lambda m=name: estimate_r0(
-                    sd, method=m,
-                    noise=args.jolissaint_noise,
-                    mode_selection=args.jolissaint_modes,
-                    alias_correction=args.jolissaint_alias,
-                ),
+            resolutions = (
+                grid_sizes if name == "jolissaint" else [None]
             )
-            print(
-                f"[P1 r0 {name}] r0={seeing[name]['r0_m']:.6g}m, "
-                f"L0={seeing[name]['L0_m']:.6g}m",
-                flush=True,
-            )
+            for n in resolutions:
+                key = (
+                    name if n is None or n == native_resolution
+                    else f"jolissaint_grid_{n}"
+                )
+                seeing[key] = stage(
+                    f"P1 r0 estimator [{name}, grid={n}]",
+                    lambda m=name, res=n: estimate_r0(
+                        sd, method=m, spatial_resolution=res,
+                        noise=args.jolissaint_noise,
+                        mode_selection=args.jolissaint_modes,
+                        alias_correction=args.jolissaint_alias,
+                    ),
+                )
+                print(
+                    f"[P1 r0 {key}] "
+                    f"r0={seeing[key]['r0_m']:.6g}m, "
+                    f"L0={seeing[key]['L0_m']:.6g}m",
+                    flush=True,
+                )
         (args.output / "p1_r0_estimator_comparison.json").write_text(
             json.dumps(seeing, indent=2), encoding="utf-8"
         )
