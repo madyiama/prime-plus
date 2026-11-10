@@ -28,7 +28,10 @@ def _central_crop(image, width=48):
     return image[y0:y0 + height, x0:x0 + width]
 
 
-def _plot_comparison(observed, psf_cube, destination, *, dataset_label="Keck/NIRC2"):
+def _plot_comparison(
+    observed, psf_cube, destination, *, dataset_label="Keck/NIRC2",
+    science_filter=None, reference_wavelength_um=None,
+):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -63,7 +66,13 @@ def _plot_comparison(observed, psf_cube, destination, *, dataset_label="Keck/NIR
     fig, ax = plt.subplots(2, 2, figsize=(10, 9), constrained_layout=True)
     for a, image, title in [
         (ax[0, 0], observed, "NIRC2 — observed field"),
-        (ax[0, 1], psf_model, "PSF-R — single-source model, K-band"),
+        (ax[0, 1], psf_model,
+         "PSF-R — single-source, "
+         + (str(science_filter) if science_filter else "science filter")
+         + (
+             f", PSF at {reference_wavelength_um:.3f} µm"
+             if reference_wavelength_um is not None else ""
+         )),
     ]:
         im = a.imshow(np.log10(np.maximum(image, 1e-7)), vmin=-7, vmax=-1.4,
                       origin="lower", cmap="magma")
@@ -851,6 +860,8 @@ def main():
     stage("comparison figure", lambda: _plot_comparison(
         trs.cam.image, psf, args.output / "comparison_nirc2_psfr.png",
         dataset_label=f"Keck/NIRC2 {args.fits.name} — {trs.aoMode}",
+        science_filter=filter_profile_diagnostics.get("filter_name"),
+        reference_wavelength_um=1e6 * float(model.freq.wvlRef),
     ))
     print("Figure:", args.output / "comparison_nirc2_psfr.png")
     if args.tt_sensitivity:
