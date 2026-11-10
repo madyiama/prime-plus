@@ -291,6 +291,14 @@ class aoSystem():
         else:
             pupilAngle = 0.0
 
+        # P3 binary-pupil sampling is opt-in; generic INIs stay legacy.
+        if self.check_config_key('telescope', 'PupilResampling'):
+            pupil_resampling = self.get_config_value(
+                'telescope', 'PupilResampling'
+            )
+        else:
+            pupil_resampling = 'legacy'
+
         if self.check_config_key('telescope','PathStaticOn'):
             PathStaticOn = self.get_config_value('telescope','PathStaticOn')
             path_static_on = self.resolve_path(PathStaticOn)
@@ -384,6 +392,7 @@ class aoSystem():
                              zenith_angle=zenithAngle,
                              obsRatio=obsRatio,
                              pupilAngle=pupilAngle,
+                             pupil_resampling=pupil_resampling,
                              path_pupil=path_pupil,
                              path_static_on=path_static_on,
                              zcoef_static_on=zCoefStaticOn,
