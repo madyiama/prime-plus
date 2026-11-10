@@ -210,6 +210,68 @@ def select_tt_jitter_mode(ao_mode, requested_mode, *, explicitly_requested=False
     return requested_mode, None
 
 
+def _ho_noise_endpoint_audit(trs):
+    """Compare finite-record and circular autocorrelation HO-noise estimates.
+
+    Runs before psfR initialization, so diagnostics survive PSD rejection.
+    These are noise *proxies*, not independent instrumental calibrations.
+    """
+    from p3.telemetry.systemDiagnosis import autocorrelation_noise_covariance
+
+    commands = np.asarray(trs.dm.com, dtype=float)
+    rate_gain = float(np.asarray(trs.holoop.gain).reshape(-1)[0])
+    if commands.ndim != 2 or len(commands) < 3 or not np.isfinite(rate_gain) or rate_gain == 0:
+        raise ValueError("Cannot diagnose HO covariance: invalid DM command array or loop gain")
+    delta = np.diff(commands, axis=0) / rate_gain
+    command_difference_cov = delta.T @ delta / len(delta)
+    periodic = autocorrelation_noise_covariance(commands, periodic=True)
+    finite = autocorrelation_noise_covariance(commands, periodic=False)
+    actual = np.asarray(trs.wfs.Cn_ao, dtype=float)
+
+    def spectrum(noise):
+        centered = command_difference_cov - noise
+        centered = 0.5 * (centered + centered.T)
+        eigenvalues = np.linalg.eigvalsh(centered)
+        neg = -eigenvalues[eigenvalues < -1e-12 * max(
+            float(np.max(np.abs(eigenvalues))), 1e-30
+        )]
+        positive = eigenvalues[eigenvalues > 0]
+        return {
+            "min_eigenvalue_m2": float(eigenvalues.min()),
+            "max_eigenvalue_m2": float(eigenvalues.max()),
+            "negative_count": int(len(neg)),
+            "max_negative_to_max_positive": float(
+                np.max(neg) / np.max(positive)
+            ) if len(neg) and len(positive) else 0.0,
+            "negative_mass_to_positive_trace": float(
+                np.sum(neg) / np.sum(positive)
+            ) if len(neg) and len(positive) else 0.0,
+        }
+
+    n = len(commands)
+    closing_jump = commands[-1] - commands[0]
+    return {
+        "ao_mode": str(trs.aoMode),
+        "frames": n,
+        "ho_loop_gain": rate_gain,
+        "units": "m2 OPD covariance before phase-radian scaling",
+        "noise_estimator_warning": (
+            "Both estimates come from command first-differences, "
+            "not an independent calibrated detector-noise measurement"
+        ),
+        "cyclic_closing_jump_opd_norm_m": float(np.linalg.norm(closing_jump)),
+        "closing_jump_covariance_trace_m2": float(
+            (closing_jump @ closing_jump) / (2 * n)
+        ),
+        "noise_trace_periodic_m2": float(np.trace(periodic)),
+        "noise_trace_nonperiodic_m2": float(np.trace(finite)),
+        "noise_trace_used_m2": float(np.trace(actual)),
+        "covariance_after_subtraction_periodic": spectrum(periodic),
+        "covariance_after_subtraction_nonperiodic": spectrum(finite),
+        "covariance_after_subtraction_used": spectrum(actual),
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fits", type=Path, required=True)
@@ -349,6 +411,16 @@ def main():
     print(f"[TT noise] covariance trace={np.trace(noise_cov):.6e} m²",
           flush=True)
     stage("configFile", lambda: configFile(sd))
+    if str(trs.aoMode).upper() == "NGS":
+        ho_endpoint = _ho_noise_endpoint_audit(sd.trs)
+        (args.output / "ho_noise_endpoint_audit.json").write_text(
+            json.dumps(ho_endpoint, indent=2), encoding="utf-8"
+        )
+        print("[NGS HO noise endpoint audit]",
+              ho_endpoint["covariance_after_subtraction_periodic"],
+              "vs finite",
+              ho_endpoint["covariance_after_subtraction_nonperiodic"],
+              flush=True)
     if args.ho_covariance_policy != "strict" and str(trs.aoMode).upper() != "NGS":
         parser.error("--ho-covariance-policy small_negative is NGS-only")
     print(f"[HO covariance] policy={args.ho_covariance_policy}", flush=True)
