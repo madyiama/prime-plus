@@ -30,10 +30,15 @@ import argparse
 import csv
 import json
 from pathlib import Path
+import sys
 from types import SimpleNamespace as NS
 
 import numpy as np
 from scipy.ndimage import map_coordinates
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from p3.aoSystem.anisoplanatismModel import (
     focal_angular_function, focal_anisoplanatism_phase_variance,
