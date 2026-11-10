@@ -59,7 +59,8 @@ class psfR:
     def __init__(self, trs, path_root='', nLayer=None, theta_ext=0,
                  compute_dphi_jitter=True, tt_covariance_mode='legacy_psfr',
                  tt_mirror_model='unity', tt_welch_nperseg=512,
-                 ho_covariance_policy='strict'):
+                 ho_covariance_policy='strict',
+                 tt_kernel_convention='noll_angular'):
         """
         Instantiating the psf-reconstruction model from a telemetry object
         """
@@ -83,6 +84,15 @@ class psfR:
         self.tt_covariance_mode = tt_covariance_mode
         self.tt_mirror_model = tt_mirror_model
         self.tt_welch_nperseg = int(tt_welch_nperseg)
+        if tt_kernel_convention not in ('noll_angular', 'legacy_unscaled_opd'):
+            raise ValueError("Unknown TT OTF kernel convention: " + str(tt_kernel_convention))
+        self.tt_kernel_convention = tt_kernel_convention
+        # Diagnostic-only alternative: the original P3 kernel omits the
+        # factor 16 when Ctt is interpreted as RMS Noll tilt coefficients.
+        # NEVER select based on science-image fit without angular calibration.
+        self.tt_kernel_dphi_multiplier_vs_noll = (
+            1.0 if tt_kernel_convention == 'noll_angular' else 1.0/16.0
+        )
         if ho_covariance_policy not in ('strict', 'tiny_negative', 'small_negative'):
             raise ValueError("Unknown HO covariance policy: " + str(ho_covariance_policy))
         if ho_covariance_policy == 'small_negative' and str(trs.aoMode).upper() != 'NGS':
@@ -372,9 +382,10 @@ class psfR:
             Ur = unit * self.freq.U_
             Vr = unit * self.freq.V_
 
-        return angular_jitter_structure_function(
+        dphi = angular_jitter_structure_function(
             Ctheta, self.ao.tel.D, self.freq.wvlRef, Ur, Vr
         )
+        return self.tt_kernel_dphi_multiplier_vs_noll * dphi
 
     def _legacy_tiptilt_covariance(self, noise_raw):
         """Preserve original PR #2 behaviour for reproducible comparisons."""
