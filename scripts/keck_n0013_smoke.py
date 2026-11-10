@@ -307,12 +307,15 @@ def main():
         help="Welch segment length for physical TT spectral covariance",
     )
     parser.add_argument(
-        "--ho-covariance-policy", choices=("strict", "small_negative"),
+        "--ho-covariance-policy",
+        choices=("strict", "tiny_negative", "small_negative"),
         default="strict",
         help=(
-            "HO modal covariance: strict (default) rejects negative eigenvalues; "
-            "small_negative explicitly enables NGS-only, warned PSD projection "
-            "when individual and accumulated negative spectral mass <= 0.5%."
+            "HO modal covariance: strict (default) rejects significant negative "
+            "eigenvalues; tiny_negative permits explicitly warned projection "
+            "if both maximum and cumulative negative spectral fractions are "
+            "<= 0.001% (LGS/NGS); small_negative permits <= 0.5% (NGS only). "
+            "Neither policy validates the sensor-noise estimator."
         ),
     )
     parser.add_argument(
@@ -430,8 +433,11 @@ def main():
               "vs finite",
               ho_endpoint["covariance_after_subtraction_nonperiodic"],
               flush=True)
-    if args.ho_covariance_policy != "strict" and str(trs.aoMode).upper() != "NGS":
-        parser.error("--ho-covariance-policy small_negative is NGS-only")
+    if args.ho_covariance_policy == "small_negative" and str(trs.aoMode).upper() != "NGS":
+        parser.error(
+            "--ho-covariance-policy small_negative is NGS-only; "
+            "use tiny_negative for a tighter LGS/NGS projection"
+        )
     print(f"[HO covariance] policy={args.ho_covariance_policy}", flush=True)
     if args.disable_tt_jitter:
         print("[TT jitter OTF] DISABLED for ablation (not a physical model)",
