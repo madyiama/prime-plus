@@ -53,6 +53,8 @@ class configFile():
         parser.set('telescope','PupilAngle', str(sysdiag.trs.tel.pupilAngle))
         parser.set('telescope', 'PupilResampling',
                    repr(getattr(sysdiag.trs.tel, 'pupil_resampling', 'legacy')))
+        parser.set('telescope', 'PupilParity',
+                   repr(getattr(sysdiag.trs.tel, 'pupil_parity', 'native')))
         if sysdiag.trs.tel.path_pupil is not None:
             parser.set('telescope','PathPupil','\'' + sysdiag.trs.tel.path_pupil + '\'')
         else:
