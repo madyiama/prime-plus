@@ -266,6 +266,68 @@ def spectral_command_noise_variance(modal_commands, fs, freq_tf, transfer,
     }
 
 
+def closed_loop_modal_psd_audit(modal_commands, fs, tf_freq, ctf):
+    """Test PSD/command variance closure and loop transfer observability.
+
+    This is a diagnostic only, NOT a correction of atmospheric modal
+    variance: a temporal filter cannot be applied to a spatial von
+    Karman variance without wind/advection and closed-loop sampling.
+    The DM-command PSD may also contain vibrations and WFS noise.
+    """
+    a = np.asarray(modal_commands, dtype=float)
+    freq_tf = np.asarray(tf_freq, dtype=float)
+    tf = np.asarray(ctf)
+    if (a.ndim != 2 or len(a) < 64 or not np.all(np.isfinite(a))
+            or fs <= 0 or len(tf) != len(freq_tf)
+            or len(freq_tf) < 3 or not np.all(np.diff(freq_tf) > 0)):
+        raise ValueError("Invalid temporal PSD/CTF audit inputs")
+    f, psd = signal.welch(
+        a, fs=fs, axis=0, nperseg=min(2048, len(a)),
+        window="hann", detrend="constant", scaling="density"
+    )
+    mean_psd = np.mean(psd, axis=1)
+    power_welch = float(trapezoid(mean_psd, f))
+    power_empirical = float(np.mean(np.var(a, axis=0)))
+    cl_power = np.interp(
+        f, freq_tf, np.abs(tf)**2,
+        left=float(np.abs(tf[0])**2),
+        right=float(np.abs(tf[-1])**2),
+    )
+    # Reporting the power fraction where H_CL would require >2x
+    # variance deconvolution is more defensible than claiming to
+    # recover the unobserved atmospheric PSD at those frequencies.
+    poor = cl_power < 0.5
+    poorly_transmitted_power = float(
+        trapezoid(mean_psd*poor, f)
+        / max(power_welch, 1e-30)
+    )
+    weighted_ctf_power = float(
+        trapezoid(mean_psd*cl_power, f)
+        / max(power_welch, 1e-30)
+    )
+    return {
+        "n_modes": int(a.shape[1]),
+        "sampling_hz": float(fs),
+        "welch_variance_rad2_mean_mode": power_welch,
+        "empirical_variance_rad2_mean_mode": power_empirical,
+        "welch_variance_relative_error": float(
+            power_welch/max(power_empirical, 1e-30)-1
+        ),
+        "fraction_command_psd_at_CTF_power_below_half": (
+            poorly_transmitted_power
+        ),
+        "command_PSD_weighted_CTF_power": weighted_ctf_power,
+        "CTF_power_low_frequency": float(cl_power[0]),
+        "CTF_power_at_nyquist": float(cl_power[-1]),
+        "temporal_turbulence_correction_applied": False,
+        "warning": (
+            "Closed-loop command variance is not identical to open-loop "
+            "turbulence variance. Wind/advection-dependent temporal "
+            "transfer calibration and observability are not validated."
+        ),
+    }
+
+
 def _fit_amplitude(observed, models, noll, radial, diameter, L0_grid):
     """Joint amplitude and L0 grid fit, equal weight in log variance."""
     logy = np.log(observed)
@@ -444,6 +506,10 @@ def estimate_r0(
             pixel_pitch_m=calib["pupil_sample_pitch_m"],
         ) for outer in L0_grid
     ]
+    transfer_audit = closed_loop_modal_psd_audit(
+        commands[:, selectable], float(trs.holoop.freq),
+        trs.holoop.tf.freq, trs.holoop.tf.ctf
+    )
     best, profile, fit_diag = _fit_amplitude(
         correct[selectable], reference, j[selectable],
         radial[selectable], calib["analysis_outer_diameter_m"], L0_grid
@@ -501,6 +567,7 @@ def estimate_r0(
             np.max(noise_fraction_selected)
         ),
         "selected_mode_fit_diagnostics": mode_diagnostics,
+        "closed_loop_temporal_psd_audit": transfer_audit,
         "selected_mode_log_ratio_rms": float(
             np.sqrt(np.mean(
                 np.log(observed_selected/theoretical)**2
