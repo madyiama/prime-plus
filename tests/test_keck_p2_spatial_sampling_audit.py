@@ -79,7 +79,6 @@ def test_stationary_powerlaw_exposes_legacy_index_zoom_error():
     assert q["physical_diameter"][
         "otf_weight_outside_native_support"
     ] < 1e-8
-    assert q["legacy"]["otf_weight_outside_native_support"] if False else True
 
 
 def test_physical_axis_resampling_of_stationary_powerlaw():
