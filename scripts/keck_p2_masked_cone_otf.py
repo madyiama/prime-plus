@@ -90,6 +90,57 @@ def _numeric_ini_value(cfg, section, key, fallback=None):
         return raw
 
 
+def pupil_clipping_diagnostics(amplitude):
+    """Quantify science-pupil rotation/interpolation overshoots BEFORE clipping.
+
+    A raw count of out-of-[0,1] pixels alone is misleading: spline
+    interpolation can yield thousands of tiny signed artifacts. Record
+    their actual magnitude and integrated amplitude/intensity changes,
+    so the audit can distinguish negligible ringing from a modified
+    effective telescope pupil.
+    """
+    raw = np.asarray(amplitude, dtype=float)
+    if raw.ndim != 2 or not np.all(np.isfinite(raw)):
+        raise ValueError("Pupil amplitude must be a finite 2-D array")
+    physical = np.clip(raw, 0.0, 1.0)
+    delta = np.abs(raw-physical)
+    out = (raw < 0.0) | (raw > 1.0)
+    raw_flux = float(np.sum(raw**2))
+    physical_flux = float(np.sum(physical**2))
+    return {
+        "raw_min_amplitude": float(raw.min()),
+        "raw_max_amplitude": float(raw.max()),
+        "out_of_range_pixel_count": int(np.count_nonzero(out)),
+        "out_of_range_pixel_count_above_1e-8": int(
+            np.count_nonzero(delta > 1e-8)
+        ),
+        "out_of_range_pixel_count_above_1e-4": int(
+            np.count_nonzero(delta > 1e-4)
+        ),
+        "out_of_range_pixel_count_above_1e-2": int(
+            np.count_nonzero(delta > 1e-2)
+        ),
+        "maximum_amplitude_clipping_change": float(delta.max()),
+        "integrated_absolute_amplitude_change_fraction": (
+            float(delta.sum()/max(float(np.abs(raw).sum()), 1e-30))
+        ),
+        "raw_pupil_intensity_sum": raw_flux,
+        "clipped_pupil_intensity_sum": physical_flux,
+        "relative_intensity_change_from_clipping": float(
+            (physical_flux-raw_flux)/max(raw_flux, 1e-30)
+        ),
+        "material_pupil_clipping_warning": bool(
+            abs(physical_flux-raw_flux)/max(raw_flux, 1e-30) > 0.005
+        ),
+        "note": (
+            "P3 telescope() interpolates/rotates the pupil but does "
+            "not clip negative spline ringing; this prototype clips "
+            "to physical transmission [0,1]. Quantify the difference "
+            "before claiming an identical effective pupil."
+        ),
+    }
+
+
 def load_keck_science_pupil(case: Path, diameter_m: float):
     """Use the exact rotated Keck telescope pupil and apodizer from run INI.
 
@@ -154,11 +205,14 @@ def load_keck_science_pupil(case: Path, diameter_m: float):
         raise ValueError("Keck science pupil must be a square array")
     if not np.all(np.isfinite(amplitude)):
         raise ValueError("Nonfinite Keck pupil amplitude")
-    # Rotation/interpolation of binary aperture FITS can cause very
-    # small cubic overshoot; count it for audit rather than ignore it.
-    overshoot = int(np.count_nonzero((amplitude < 0) | (amplitude > 1)))
+    # Quantify the distortion from the physical [0,1] clipping.
+    # telescope() itself does not clip after spline rotation, hence
+    # this difference must be recorded rather than hidden.
+    clipping = pupil_clipping_diagnostics(amplitude)
+    overshoot = clipping["out_of_range_pixel_count"]
     amplitude = np.clip(amplitude, 0, 1)
     return amplitude, {
+        "clipping_diagnostics": clipping,
         "source": str(resolved),
         "apodizer": (
             str(resolved_apod) if resolved_apod is not None else None
