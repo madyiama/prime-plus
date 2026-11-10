@@ -62,13 +62,19 @@ def _clip_layer_variance(var_sensed: np.ndarray, x: np.ndarray) -> np.ndarray:
     return np.where(x >= 1, _FULL_LAYER_VARIANCE, var)
 
 def focal_anisoplanatism_phase_variance(tel, atm, lgs):
-    """Kolmogorov cone-effect piston-removed variance, in phase radians^2.
+    """Kolmogorov cone-effect piston-AND-tilt-removed variance [rad^2].
 
     Hardy (1998), eq. 16, as reproduced by Beltramo-Martin et al.
     (2019, MNRAS 487, 5450), eq. 12:
 
       sigma_phi^2 = (D/r0)^(5/3) sum_l w_l *
           [0.5 (h_l/H)^(5/3) - 0.452 (h_l/H)^2] / 0.423.
+
+    The published 0.452 term corresponds to removal of both global
+    piston and x/y wavefront tilt on an ideal circular pupil (Hardy;
+    Sasiela, Electromagnetic Wave Propagation in Turbulence, Eq 6.197).
+    It must NOT be directly equated to the legacy Flicker SF/OTF
+    integration which removes piston but still contains cone tip-tilt.
 
     Here r0 is defined for the same line of sight and wavelength as atm,
     the weights are fractions of integrated Cn2 dh, h/H is along the same
