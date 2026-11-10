@@ -52,6 +52,30 @@ def _integrate_spectral_psf(psf):
         return np.sum(psf, axis=-1)
     raise ValueError("Expected a 2-D PSF or a 3-D wavelength cube")
 
+
+def _anisoplanatism_zero_lag(dphi):
+    """Enforce the OTF normalization Dphi(delta=0)=0, per source.
+
+    The interpolated Keck focal-angular anisoplanatism map may carry a
+    nonzero additive offset at the discrete zero-baseline OTF sample.
+    The constant scales the entire OTF but cancels when the PSF is
+    flux-normalized. It DOES bias the OTF-based Strehl and any WFE
+    converted from that Strehl. Subtracting the reference at the central
+    OTF sample changes neither the PSF shape nor the normalized energy.
+
+    Input is [y, x] or [y, x, source], phase rad^2 at science wavelength.
+    This removes only the DC offset; it does not change the spatially
+    varying anisoplanatism model or the Hardy analytical coefficients.
+    """
+    dphi = np.asarray(dphi, dtype=float)
+    if dphi.ndim not in (2, 3) or min(dphi.shape[:2]) < 2:
+        raise ValueError("Anisoplanatism dphi must be [y,x] or [y,x,source]")
+    if not np.all(np.isfinite(dphi)):
+        raise ValueError("Anisoplanatism dphi contains non-finite samples")
+    centre = (dphi.shape[0]//2, dphi.shape[1]//2)
+    return dphi - dphi[centre]
+
+
 class psfR:
     """
     """
@@ -475,9 +499,19 @@ class psfR:
             Cn2_at_science_wvl = Cn2 * (
                 self.ao.atm.wvl / self.freq.wvlRef
             )**2
-            self.dani = np.einsum(
+            dani_raw = np.einsum(
                 'slxy,l->xys', self.dphi_ani, Cn2_at_science_wvl
             )
+            # The interpolation of a baseline-averaged focal-anisoplanatic
+            # map can leave Dphi(0)>0 (0.304/0.176 rad^2 for n0120 at
+            # 1/7 layers). The PSF normalization removes this scale, but
+            # the unnormalized OTF Strehl is otherwise biased.
+            centre = (dani_raw.shape[0]//2, dani_raw.shape[1]//2)
+            self.dani_raw_zero_lag_rad2 = np.asarray(
+                dani_raw[centre], dtype=float
+            ).copy()
+            self.dani_zero_lag_reference = 'central_otf_sample'
+            self.dani = _anisoplanatism_zero_lag(dani_raw)
             SF = SF[:,:,np.newaxis] + self.dani
         else:
             SF = np.repeat(SF[:,:,np.newaxis],self.ao.src.nSrc,axis=2)
@@ -579,7 +613,9 @@ class psfR:
             # ao.src.wvl[0] is the *central* science wavelength, whereas
             # freq.wvlRef may be the shortest spectral bin.
             Cn2     = self.ao.atm.weights * self.ao.atm.r0**(-5/3) * (self.ao.atm.wvl/self.freq.wvlRef)**2
-            dani    = (self.dphi_ani[0].transpose(1,2,0) * Cn2).sum(axis=2)
+            dani = _anisoplanatism_zero_lag(
+                (self.dphi_ani[0].transpose(1,2,0) * Cn2).sum(axis=2)
+            )
             otf_ani = np.exp(-0.5 * dani)
             sr_ani  = np.sum(otf_dl * otf_ani)/S
             self.wfe['TOTAL ANISOPLANATISM'] = sr2fwe(sr_ani)
@@ -588,17 +624,23 @@ class psfR:
 
         if self.trs.aoMode == 'LGS' and self.freq.isAniso:
             # Angular
-            dani    = (self.dani_ang[0].transpose(1,2,0) * Cn2).sum(axis=2)
+            dani = _anisoplanatism_zero_lag(
+                (self.dani_ang[0].transpose(1,2,0) * Cn2).sum(axis=2)
+            )
             otf_ani = np.exp(-0.5 * dani)
             sr_ani  = np.sum(otf_dl * otf_ani)/S
             self.wfe['ANGULAR ANISOPLANATISM'] = sr2fwe(sr_ani)
             #tiptilt
-            dani    = (self.dani_tt[0].transpose(1,2,0) * Cn2).sum(axis=2)
+            dani = _anisoplanatism_zero_lag(
+                (self.dani_tt[0].transpose(1,2,0) * Cn2).sum(axis=2)
+            )
             otf_ani = np.exp(-0.5 * dani)
             sr_ani  = np.sum(otf_dl * otf_ani)/S
             self.wfe['ANISOKINETISM'] = sr2fwe(sr_ani)
             # focal
-            dani    = (self.dani_focang[0].transpose(1,2,0) * Cn2).sum(axis=2)
+            dani = _anisoplanatism_zero_lag(
+                (self.dani_focang[0].transpose(1,2,0) * Cn2).sum(axis=2)
+            )
             otf_ani = np.exp(-0.5 * dani)
             sr_ani  = np.sum(otf_dl * otf_ani)/S
             self.wfe['FOCAL ANISOPLANATISM'] = np.sqrt(sr2fwe(sr_ani) **2 - self.wfe['ANGULAR ANISOPLANATISM']**2)
