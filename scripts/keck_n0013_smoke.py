@@ -323,6 +323,11 @@ def main():
     parser.add_argument("--sav", type=Path, required=True)
     parser.add_argument("--calib", type=Path, required=True)
     parser.add_argument("--output", type=Path, default=Path("results/n0013"))
+    parser.add_argument(
+        "--n-layer", type=int, choices=(1, 3, 7), default=1,
+        help="Equivalent atmospheric layers (1=historical baseline; "
+             "7=retain all MASS-DIMM altitude bins).",
+    )
     parser.add_argument("--tt-sensitivity", action="store_true",
                         help="Compare PSFs for different TT noise-subtraction fractions")
     parser.add_argument(
@@ -341,6 +346,16 @@ def main():
         "--tt-jitter-model",
         choices=("legacy_psfr", "spectral_closed_loop"),
         help="TT physical covariance used for OTF; overrides TOML",
+    )
+    parser.add_argument(
+        "--tt-kernel-convention",
+        choices=("noll_angular", "legacy_unscaled_opd"),
+        default="noll_angular",
+        help=(
+            "Documented TT kernel normalization. noll_angular uses a=D*theta/4 "
+            "and physical angular OTF; legacy_unscaled_opd removes factor 16 "
+            "in Dphi for a controlled historical comparison ONLY."
+        ),
     )
     parser.add_argument(
         "--tt-mirror-model",
@@ -406,8 +421,18 @@ def main():
     trs = stage("telemetryKeck", lambda: telemetryKeck(
         str(args.sav.resolve()), str(args.fits.resolve()),
         str(args.calib.resolve()), path_save=str(args.output.resolve()),
-        cam_fov=128, nLayer=1, addNCPA=False,
+        cam_fov=128, nLayer=args.n_layer, addNCPA=False,
     ))
+    pupil_diagnostics = getattr(trs.tel, "pupil_orientation", {})
+    massdimm_diagnostics = getattr(trs.atm, "massdimm_diagnostics", {})
+    (args.output / "pupil_orientation_diagnostics.json").write_text(
+        json.dumps(pupil_diagnostics, indent=2), encoding="utf-8"
+    )
+    (args.output / "massdimm_diagnostics.json").write_text(
+        json.dumps(massdimm_diagnostics, indent=2), encoding="utf-8"
+    )
+    print("[Pupil orientation]", pupil_diagnostics, flush=True)
+    print("[MASS-DIMM source]", massdimm_diagnostics, flush=True)
     filter_profile_diagnostics = getattr(
         trs.cam, "filter_profile_diagnostics", {}
     )
@@ -468,6 +493,53 @@ def main():
     print(f"[TT noise] covariance trace={np.trace(noise_cov):.6e} m²",
           flush=True)
     stage("configFile", lambda: configFile(sd))
+    atmosphere_audit = {
+        "r0_tel_m_at_atmosphere_wavelength": float(sd.trs.atm.r0_tel),
+        "atmosphere_wavelength_m": float(sd.trs.atm.wvl),
+        "seeing_tel_arcsec": float(sd.trs.atm.seeing),
+        "seeing_dimm_arcsec": (
+            float(sd.trs.atm.seeing_dimm)
+            if sd.trs.atm.seeing_dimm > 0 else None
+        ),
+        "seeing_mass_arcsec": (
+            float(sd.trs.atm.seeing_mass)
+            if sd.trs.atm.seeing_mass > 0 else None
+        ),
+        "fitted_L0_m": float(sd.trs.atm.L0_tel),
+        "r0_fit_uncertainty_m": float(sd.trs.atm.dr0_tel),
+        "pseudo_open_loop": {
+            "delay_frames": float(sd.trs.dm.pseudo_ol_delay_frames),
+            "frames_used": int(sd.trs.dm.pseudo_ol_frames_used),
+            "frames_dropped": int(sd.trs.dm.pseudo_ol_frames_dropped),
+            "method": sd.trs.dm.pseudo_ol_alignment,
+            "sign_independently_verified": bool(
+                sd.trs.dm.pseudo_ol_sign_independently_verified
+            ),
+        },
+        "fried_coefficient": 0.976,
+        "r0_wavelength_power": 1.2,
+        "atmosphere_layer_count": len(sd.trs.atm.Cn2Weights),
+        "atmosphere_layer_weights": list(map(float, sd.trs.atm.Cn2Weights)),
+        "atmosphere_layer_heights_m": list(map(float, sd.trs.atm.Cn2Heights)),
+        "full_massdimm_layer_weights": list(map(
+            float, sd.trs.atm.Cn2Weights_full
+        )),
+        "full_massdimm_layer_heights_m": list(map(
+            float, sd.trs.atm.Cn2Heights_full
+        )),
+        "massdimm_provenance": massdimm_diagnostics,
+        "tt_kernel_convention_requested": args.tt_kernel_convention,
+    }
+    (args.output / "atmosphere_reconstruction_audit.json").write_text(
+        json.dumps(atmosphere_audit, indent=2), encoding="utf-8"
+    )
+    print("[Atmosphere / r0]", {
+        k: atmosphere_audit[k] for k in (
+            "r0_tel_m_at_atmosphere_wavelength",
+            "seeing_tel_arcsec", "seeing_dimm_arcsec", "fitted_L0_m",
+            "atmosphere_layer_count",
+        )
+    }, flush=True)
     ho_preflight = _ho_covariance_preflight(sd.trs)
     (args.output / "ho_covariance_preflight.json").write_text(
         json.dumps(ho_preflight, indent=2), encoding="utf-8"
@@ -501,6 +573,7 @@ def main():
         tt_mirror_model=tt_mirror_model,
         tt_welch_nperseg=tt_jitter_nperseg,
         ho_covariance_policy=args.ho_covariance_policy,
+        tt_kernel_convention=args.tt_kernel_convention,
     ))
 
     # Reference-wavelength / Fourier-grid / angular-centroid audit.
@@ -630,6 +703,13 @@ def main():
         "filter_profile_diagnostics": filter_profile_diagnostics,
         "addNCPA": False,
         "ao_mode": str(trs.aoMode),
+        "atmosphere_reconstruction_audit": atmosphere_audit,
+        "pupil_orientation_diagnostics": pupil_diagnostics,
+        "massdimm_diagnostics": massdimm_diagnostics,
+        "tt_kernel_convention": model.tt_kernel_convention,
+        "tt_kernel_phase_structure_multiplier_vs_noll": (
+            model.tt_kernel_dphi_multiplier_vs_noll
+        ),
         "ho_covariance_policy": args.ho_covariance_policy,
         "ho_covariance_projection_applied": bool(
             getattr(model, "ho_covariance_diagnostics", {}).get(
