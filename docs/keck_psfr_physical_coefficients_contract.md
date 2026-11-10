@@ -54,6 +54,68 @@ convention (zenith-normalized or raw) is not certified by the archived
 airmass-adjusted ratios, with the assumption in metadata. Do not replace
 the independent site seeing by the conditional estimate without provenance.
 
+### 2.2. WFS r0 is already a line-of-sight measurement
+
+The WFS-based Zernike fit in `systemDiagnosis` estimates `r0_tel` directly
+along the Keck science line of sight. The generated INI formerly exported
+this as `[atmosphere] Seeing`, while generic `aoSystem` treated all INI
+seeings as zenith-normalized and multiplied the corresponding `r0` by
+`airmass^(-3/5)` again. This was a physical double correction.
+
+`configFile` now emits `SeeingReference='line_of_sight'` for telemetry-
+derived Keck values. `aoSystem` retains a default `SeeingReference='zenith'`
+for old manually-authored INIs; it only applies `airmass^(-3/5)` to those
+zenith references. The automatic science FOV follows the same convention.
+
+Example n0120 (X=1.35835884), pre-fix/model reference lambda=1.530µm:
+- `r0_tel(500nm)=0.11474041m` from the WFS fit (already LOS);
+- expected `r0(1.530µm)=0.43911889m` after lambda^(6/5) scaling;
+- old AO model `r0(1.530µm)=0.36540410m` after erroneous extra
+  factor `X^(-3/5)=0.83213`.
+
+The smoke now asserts this invariant after model construction and writes
+both r0s plus the declared seeing reference. All 1/3/7-layer PSFs after
+this fix must be compared with one another on the same commit.
+
+### 2.3. Analytical cone effect versus OTF-equivalent anisoplanatism
+
+Hardy (1998), eq. 16, as reproduced in Beltramo-Martin et al. (2019)
+*PRIME*, MNRAS 487, 5450, eq. 12:
+https://academic.oup.com/mnras/article/487/4/5450/5519866
+
+For a normalized vertical turbulence fraction `w_l`, r0 at a consistent
+line-of-sight wavelength, and `x_l=h_l/H_LGS`:
+
+```
+sigma_phi^2 = (D/r0)^(5/3) * sum_l w_l *
+              [0.5*x_l^(5/3) - 0.452*x_l^2] / 0.423
+WFE_cone_nm = sqrt(sigma_phi^2) * wavelength_m*1e9/(2*pi)
+```
+
+The full-layer above-beacon clipping (max Noll piston-removed
+variance `1.0299`) is a model approximation, not Hardy's small-height
+series formula. The `0.423` maps integrated Cn2 dh to Fried r0;
+`0.452` comes from the published cone expression. An old duplicate
+function used `0.425` and omitted `/0.423`, while returning WFE nm
+under the misleading name `focal_anisoplanatism_variance`. That name is
+now a backwards-compatible alias of `focal_anisoplanatism_wfe`;
+`focal_anisoplanatism_phase_variance` explicitly returns radians².
+
+**Do not equate** this Kolmogorov analytical phase variance to the
+OTF-derived diffraction-weighted Maréchal-equivalent WFE, which includes
+the model's finite-L0 and DM/frequency filtering assumptions. Their
+trends can differ, and should be compared, not forced to coincide by
+tweaking coefficients.
+
+With n0120's actual seven-layer MASS/DIMM weights and H_LGS=90km,
+the standalone Hardy estimator at `r0_tel(500nm)=11.474cm` gives
+about `312.4nm` for the 1-layer equivalent altitude `6.043km`
+and `295.0nm` for 7 layers. The older 1-vs-7 PSF comparison had a
+10.78% higher peak with 7 layers but **different Git revisions** and
+**missing 7-layer error-budget diagnostics**. It is not a controlled
+test of this physical formula. P2 now saves
+`anisoplanatism_diagnostics.json` with both Hardy and OTF results.
+
 ## 3. Keck II NIRC2 pupil angle
 
 KAON 1160 (Ragland, 2017), equations (1) and (2):
