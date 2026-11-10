@@ -21,6 +21,10 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--resolution", type=int, default=256)
     parser.add_argument("--oversample", type=int, default=2)
+    parser.add_argument(
+        "--parity", choices=("native", "flip_x", "flip_y"),
+        default="native", help="FITS array reflection hypothesis, not calibrated",
+    )
     args = parser.parse_args()
 
     import matplotlib
@@ -43,6 +47,7 @@ def main():
     report["archived_mask_shape"] = list(mask.shape)
     report["analysis_resolution"] = args.resolution
     report["analysis_oversample"] = args.oversample
+    report["input_array_parity_hypothesis"] = args.parity
     report["comparison_limitation"] = (
         "Qualitative diffraction morphology only; uncalibrated FITS "
         "mask zero, mechanical angle and image-axis convention. No "
@@ -53,7 +58,9 @@ def main():
     fig, axes = plt.subplots(2, len(hypotheses),
                              figsize=(3.4*len(hypotheses), 6.4))
     for k, (label, angle) in enumerate(hypotheses.items()):
-        mask_k = binary_pupil_on_grid(mask, args.resolution, angle)
+        mask_k = binary_pupil_on_grid(
+            mask, args.resolution, angle, parity=args.parity,
+        )
         psf_k = diffraction_intensity(mask_k, args.oversample)
         np.save(args.output / f"pupil_{label}.npy", mask_k)
         np.save(args.output / f"diffraction_{label}.npy", psf_k)
