@@ -23,7 +23,10 @@ FIELDS = [
     "tt_phase_structure_multiplier_vs_noll", "ho_covariance_policy",
     "atmosphere_layers", "atmosphere_profile_source", "mass_dimm_profile_age_min",
     "dimm_seeing_arcsec", "telemetry_seeing_arcsec", "seeing_telemetry_over_dimm",
+    "airmass_nirc2", "dimm_los_if_zenith_arcsec",
+    "seeing_telemetry_over_dimm_los_if_zenith",
     "r0_tel_m_500nm", "r0_dimm_m_500nm", "r0_tel_over_dimm",
+    "r0_tel_over_dimm_los_if_zenith",
     "L0_fit_m", "L0_on_fit_bound", "r0_fit_success",
     "pseudo_ol_delay_frames", "pseudo_ol_frames_used",
     "pseudo_ol_sign_verified",
@@ -78,7 +81,16 @@ def summarize_case(run: Path):
            and isinstance(seeing_dimm, (int,float)) and seeing_dimm > 0
            else None)
     if rel is not None and (rel > 1.5 or rel < 2.0/3.0):
-        flags.append("WFS_DIMM_SEEING_DISCREPANCY")
+        flags.append("WFS_DIMM_SEEING_DISCREPANCY_RAW")
+    seeing_dimm_los = atm.get("seeing_dimm_los_if_zenith_arcsec")
+    rel_los = (
+        seeing_tel/seeing_dimm_los
+        if isinstance(seeing_tel, (int,float))
+        and isinstance(seeing_dimm_los, (int,float)) and seeing_dimm_los > 0
+        else None
+    )
+    if rel_los is not None and (rel_los > 1.5 or rel_los < 2.0/3.0):
+        flags.append("WFS_DIMM_SEEING_DISCREPANCY_LOS_IF_ZENITH")
 
     r0_dimm = (0.976 * 500e-9 * 180*3600/3.141592653589793 / seeing_dimm
                if isinstance(seeing_dimm, (int,float)) and seeing_dimm > 0
@@ -105,9 +117,15 @@ def summarize_case(run: Path):
         "dimm_seeing_arcsec": seeing_dimm,
         "telemetry_seeing_arcsec": seeing_tel,
         "seeing_telemetry_over_dimm": rel,
+        "airmass_nirc2": atm.get("airmass_nirc2"),
+        "dimm_los_if_zenith_arcsec": seeing_dimm_los,
+        "seeing_telemetry_over_dimm_los_if_zenith": rel_los,
         "r0_tel_m_500nm": atm.get("r0_tel_m_at_atmosphere_wavelength"),
         "r0_dimm_m_500nm": r0_dimm,
         "r0_tel_over_dimm": atm.get("r0_tel_over_dimm"),
+        "r0_tel_over_dimm_los_if_zenith": atm.get(
+            "r0_tel_over_dimm_los_if_zenith"
+        ),
         "L0_fit_m": atm.get("fitted_L0_m"),
         "L0_on_fit_bound": atm.get("r0_fit_L0_at_upper_bound"),
         "r0_fit_success": atm.get("r0_fit_success"),
