@@ -61,23 +61,44 @@ def _clip_layer_variance(var_sensed: np.ndarray, x: np.ndarray) -> np.ndarray:
     var = np.clip(var_sensed, 0, _FULL_LAYER_VARIANCE)
     return np.where(x >= 1, _FULL_LAYER_VARIANCE, var)
 
-def focal_anisoplanatism_wfe(tel, atm, lgs):
-    """
-        Computes the wavefront error of the focal anisoplanatism due to the finite altitude
-        of the LGS in SLAO mode by using Parenti and Sassiela+04
-        INPUTS:
-            - tel, atm and lgs objects
-            - method : Sasiela or Tyler (this latter not validated yet)
-        OUTPUTS
-            - wfe, the focal anisoplanatism error in nm
-    """
+def focal_anisoplanatism_phase_variance(tel, atm, lgs):
+    """Kolmogorov cone-effect piston-removed variance, in phase radians^2.
 
+    Hardy (1998), eq. 16, as reproduced by Beltramo-Martin et al.
+    (2019, MNRAS 487, 5450), eq. 12:
+
+      sigma_phi^2 = (D/r0)^(5/3) sum_l w_l *
+          [0.5 (h_l/H)^(5/3) - 0.452 (h_l/H)^2] / 0.423.
+
+    Here r0 is defined for the same line of sight and wavelength as atm,
+    the weights are fractions of integrated Cn2 dh, h/H is along the same
+    geometrical line of sight, and 0.423 comes from Fried's r0 definition.
+
+    The finite-beacon clipping and the full-layer cap are *modeling
+    approximations*. This Kolmogorov variance does NOT model finite L0,
+    a filtered DM, or the diffraction-weighted OTF-equivalent WFE.
+    """
     x = _height_ratio(atm, lgs)
-    var = np.sum(np.asarray(FourierUtils.cpuArray(atm.weights)) * _clip_layer_variance(
-        (0.5*x**(5/3) - 0.452*x**2)/0.423, x))
-    wfe = np.sqrt(var * (tel.D/atm.r0)**(5/3)) * (atm.wvl*1e9/2/np.pi)
+    weights = np.asarray(FourierUtils.cpuArray(atm.weights), dtype=float).reshape(-1)
+    if (x.shape != weights.shape or not np.all(np.isfinite(weights))
+            or np.any(weights < 0)
+            or not np.isclose(weights.sum(), 1.0, atol=1e-6, rtol=0)):
+        raise ValueError("Invalid normalized layer weights for focal anisoplanatism")
+    kernel = (0.5 * x**(5.0/3.0) - 0.452 * x**2) / 0.423
+    variance_normalized = np.sum(weights * _clip_layer_variance(kernel, x))
+    return float(variance_normalized * (tel.D/atm.r0)**(5.0/3.0))
 
-    return wfe
+
+def focal_anisoplanatism_wfe(tel, atm, lgs):
+    """Analytical Kolmogorov cone-effect wavefront RMS [nm OPD].
+
+    See focal_anisoplanatism_phase_variance for the reference formula
+    and assumptions. Not interchangeable with the OTF-derived Maréchal
+    equivalent error from psfR.get_error_breakdown().
+    """
+    phase_variance = focal_anisoplanatism_phase_variance(tel, atm, lgs)
+    return np.sqrt(phase_variance) * (atm.wvl*1e9/(2*np.pi))
+
 
 def anisokinetism_wfe(tel, atm, src, ngs, method="Sasiela"):
     """
@@ -124,20 +145,16 @@ def anisokinetism_wfe(tel, atm, src, ngs, method="Sasiela"):
     else:
         raise ValueError("The method " + method + "is not supported." )
 
-def focal_anisoplanatism_variance(tel,atm,lgs):
-    '''
-        Compute the variance of the focal anisoplanatism due to the finite altitude of the LGS in SLAO mode
-        INPUTS:
-            - tel, atm and lgs objects
-        OUTPUTS
-            - wfe, the focal anisoplanatism error in nm
-    '''
-    
-    x = _height_ratio(atm, lgs)
-    var = np.sum(np.asarray(FourierUtils.cpuArray(atm.weights)) * _clip_layer_variance(
-        0.5*x**(5/3) - 0.425*x**2, x))
-    wfe = np.sqrt(var * (tel.D/atm.r0)**(5/3)) * (atm.wvl*1e9/2/np.pi)
-    return wfe
+def focal_anisoplanatism_variance(tel, atm, lgs):
+    """Legacy misnamed alias, returns WFE in nm (NOT a variance).
+
+    Previously used an inconsistent 0.425 coefficient and lacked /0.423
+    despite returning the same quantity as focal_anisoplanatism_wfe.
+    Prefer focal_anisoplanatism_phase_variance for phase variance [rad^2]
+    or focal_anisoplanatism_wfe for RMS OPD [nm].
+    """
+    return focal_anisoplanatism_wfe(tel, atm, lgs)
+
 
 #%% PHASE STRUCTURE FUNCTION
 def anisoplanatism_structure_function(tel, atm, src, lgs, ngs,
