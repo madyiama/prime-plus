@@ -168,6 +168,109 @@ No production estimator change, no new PR. Do not compare to DIMM
 as an equality target; seeing from the on-telescope AO path includes
 dome seeing and may differ from external monitors.
 
+## Final P1 numerical verification — one comparison, no further PRs
+
+**Operational choice (2026-11-10):** retain historical
+\`method="zernike"\` as the **provisional** seeing reference for
+P3 development. This means *available and reproducible*, not
+"absolutely calibrated". The experimental Jolissaint method remains
+an independent Keck reference/diagnostic, not a new production default.
+
+### Same telemetry; two physical IF samplings; temporal observability
+
+To test the **actual Keck Xinetics influence function**, rather than
+a resized image of an already sampled IF, pass
+\`--jolissaint-grid-sizes 100,201\` with \`--p1-only
+--r0-method both\`. The native 100x100 basis has 4.95 pixels per
+DM pitch, while 201x201 regenerates the same physical influence
+functions at 10.0 pixels per pitch; 261x261 gives 13.0 pixels/pitch
+and is a high-memory optional follow-up **only if the 100/201
+comparison is not sufficiently stable**. This matches the original
+IDL requirement to test spatial sampling rather than silently
+upsampling the existing IF image.
+
+The command runs systemDiagnosis **once**, then compares two
+experimental Jolissaint estimates on the same original DM command
+series and the same selected 75 LGS modes. Write
+\`p1_r0_estimator_comparison.json\` (Zernike, Jolissaint native,
+Jolissaint 201) and \`p1_r0_spatial_convergence.json\`.
+
+A numerical criterion of **≤5% relative r0 spread** between grids
+is a practical grid convergence screen only. It does not certify
+the algorithm's absolute r0 calibration. Examine also selected
+Noll consistency, \`L0_best_on_grid_boundary\`, Gram conditioning,
+and the variance residual \`selected_mode_log_ratio_rms\`.
+
+The new \`closed_loop_temporal_psd_audit\` records
+Welch-vs-empirical variance closure and the fraction of measured
+DM-command modal PSD in frequency regions where the AO closed-loop
+turbulence transfer \`|CTF|²\` is less than one half. This audit
+**does not** invert turbulence transfer into a fictitious infinite
+open-loop variance; proper physical inversion needs temporal
+turbulence dynamics (winds / frozen flow) and observability,
+whereas the current model covariance is spatial. Thus an
+experimental Jolissaint result may be numerically converged while
+still being spectrally biased.
+
+\`\`\`bash
+git switch feat/psfr-p1-r0-timing-audit
+git pull --ff-only
+uv run --with pytest python -m pytest -q \
+  tests/test_keck_p1_unified_estimator.py
+uv run python scripts/keck_n0013_smoke.py \
+  --fits "/existing/n0120.fits" \
+  --sav "/existing/n0120_LGS_trs.sav" \
+  --calib "/existing/KECK_CALIBRATION" \
+  --output "$PWD/results/n0120_P1_final_check" \
+  --n-layer 7 --p1-only --r0-method both \
+  --jolissaint-grid-sizes 100,201
+\`\`\`
+
+### P1 stop criterion for the P3 project
+
+After the above single 100/201 experiment:
+
+- **If stable**: retain the numerical comparison as a reproducible
+  baseline, keep legacy Zernike as operational r0 and archive
+  Jolissaint as experimental independent estimate. Do not use
+  the criterion to force the \(L_0\) result to 31m or to force
+  agreement with DIMM.
+- **If unstable**: record the grid limitation as an experimental
+  Jolissaint systematic; do not replace the legacy estimator.
+  A single 261-point confirmation is optional if needed for
+  research publication, **not required to advance P3**.
+- Regardless: **LGS tip-tilt cannot constrain \(L_0\)**; a grid-boundary
+  optimum is not an instrumentally calibrated measurement.
+  The historic pseudo-OL RTC time sign remains separately
+  unproven. P1 cannot be labelled "physically closed" before
+  independent validation, even though P3 may continue with an
+  explicitly provisional atmospheric prior.
+- **No additional PR**: preserve the P1 contracts and checks
+  here in the same PR #16, and freeze r0 processing code
+  during subsequent P3 reconstruction unless a demonstrated bug
+  invalidates the data.
+
+### Later multi-observation DIMM validation in refactored code
+
+The DIMM check is **statistical**, not equality of two r0 values:
+the AO wavefront may see dome turbulence absent from the site DIMM.
+At matched wavelength/time/airmass, use airmass-corrected *seeing*
+or \`r0^(-5/3)\`; independent Kolmogorov components add as
+\`r0_AO^(-5/3) ≈ r0_external_LOS^(-5/3)
++ r0_dome^(-5/3)\`, subject to line-of-sight and
+instrumental differences. Retain source provenance and sample-age
+from \`massdimm_diagnostics\`. When the new multi-observation
+data-ingestion is ready, collect many independent observations
+(not the 1/7-layer variants of the same \`n0120\`), match the DIMM
+within a defined time window and verified zenith convention,
+exclude bad temporal/airmass/telemetry quality records by
+predefined rules, then report Spearman/Pearson correlation,
+robust regression slope and intercept, scatter and bootstrap
+confidence bands, including AO-vs-DIMM offset and dome
+conditions. Do **not** tune the telemetry r0 to a 1:1 DIMM line.
+The source-specific DIMM convention must be verified before
+interpreting any systematic dome-seeing offset.
+
 ## Validation gates before production substitution
 
 1. Synthetic phase/noise tests, covariance positivity, reference
