@@ -14,6 +14,19 @@ import tomllib
 import numpy as np
 
 
+def _central_crop(image, width=48):
+    """Fixed geometric centre crop: do not chase stars/hot pixels."""
+    image = np.asarray(image)
+    if image.ndim != 2:
+        raise ValueError("Central crop expects a two-dimensional image")
+    ny, nx = image.shape
+    height = min(int(width), ny)
+    width = min(int(width), nx)
+    y0 = (ny - height) // 2
+    x0 = (nx - width) // 2
+    return image[y0:y0 + height, x0:x0 + width]
+
+
 def _plot_comparison(observed, psf_cube, destination, *, dataset_label="Keck/NIRC2"):
     import matplotlib
     matplotlib.use("Agg")
@@ -57,14 +70,11 @@ def _plot_comparison(observed, psf_cube, destination, *, dataset_label="Keck/NIR
         a.set_xlabel("x [pixels]")
         a.set_ylabel("y [pixels]")
     for a, image, title in [
-        (ax[1, 0], observed, "Observed core (48 × 48 px)"),
-        (ax[1, 1], psf_model, "Model core (48 × 48 px)"),
+        (ax[1, 0], observed, "Observed — central 48 × 48 px"),
+        (ax[1, 1], psf_model, "Model — central 48 × 48 px"),
     ]:
-        ny, nx = image.shape
-        cy, cx = np.unravel_index(np.nanargmax(image), image.shape)
-        y0, y1 = max(0, cy-24), min(ny, cy+24)
-        x0, x1 = max(0, cx-24), min(nx, cx+24)
-        a.imshow(np.log10(np.maximum(image[y0:y1, x0:x1], 1e-7)),
+        core = _central_crop(image, width=48)
+        a.imshow(np.log10(np.maximum(core, 1e-7)),
                  vmin=-7, vmax=-1.4, origin="lower", cmap="magma")
         a.set_title(title)
         a.set_xlabel("x [pixels]")
