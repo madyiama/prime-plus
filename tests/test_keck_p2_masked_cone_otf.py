@@ -268,11 +268,11 @@ def test_rotated_pupil_clipping_report_separates_tiny_from_material_overshoots()
     assert report["material_pupil_clipping_warning"] is False
     assert abs(report["relative_intensity_change_from_clipping"]) < 1e-9
 
-    raw[90, 90] = 3.0
+    raw[90, 90] = 10.0
     report_material = pupil_clipping_diagnostics(raw)
     assert report_material["out_of_range_pixel_count_above_1e-2"] == 1
     assert report_material["material_pupil_clipping_warning"] is True
-    assert report_material["maximum_amplitude_clipping_change"] == 2.0
+    assert report_material["maximum_amplitude_clipping_change"] == 9.0
     assert report_material["relative_intensity_change_from_clipping"] < 0
 
 
