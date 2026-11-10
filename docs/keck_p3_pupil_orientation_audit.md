@@ -94,3 +94,98 @@ Outputs:
 
 Do not optimize a rotation, defocus or turbulence parameter merely
 to improve visual agreement with n0120.
+
+## P3 optical-model integration — bounded binary mask (second increment)
+
+The first P3 script was a **read-only orientation/diffraction audit**.
+The second increment also wires a strictly opt-in **production-optical
+pupil transform** into `telescope` (not into r0, L0 or the PSF fitting):
+
+- `PupilResampling='legacy'`: unchanged generic INI default;
+  original scipy spline rotation + linear resizing retained as baseline.
+- `PupilResampling='physical_binary'`: archived binary FITS mask is
+  rotated and area-integrated on an oversampled output grid
+  (4 subpixels per axis); complex-pupil amplitude remains in [0,1],
+  without arbitrary cubic overshoot or post-hoc clipping.
+  Fractional edge amplitude represents area occupancy within a
+  computational pixel. The raw FITS is required to be 0/1, otherwise
+  an explicit error is emitted.
+- A complete mask inventory from `PMSNAME` is mandatory in this
+  corrected mode; unknown masks or missing `INCIRCLE` data fail
+  instead of silently substituting the archived OPEN mask.
+- Diagnostic pupil script now uses the **same transform** as the
+  optional optical model, so the plotted diffraction hypotheses
+  correspond to the telescope pupil transform.
+- The experimental rotation sensitivity flag is
+  `--p3-pupil-rotation {header,as_archived,reverse_sign,plus_90,minus_90}`.
+  The default `header` uses the KAON 1160 angle already in the
+  telemetry. No rotation is automatically calibrated. The camera
+  angle selected for model construction is recorded in the metadata;
+  the TT kernel also depends on `trs.tel.pupilAngle`, so isolate
+  pupil effects with `--disable-tt-jitter` when comparing alternatives.
+
+### Tomorrow's ordered protocol
+
+Use the actual n0120 science FITS / SAV. Each output must be
+in its own directory; never overwrite a baseline:
+
+```bash
+git fetch origin
+git switch feat/psfr-p3-pupil-orientation-audit
+git pull --ff-only
+uv run --with pytest python -m pytest -q \
+  tests/test_keck_p3_pupil_audit.py \
+  tests/test_keck_p3_pupil_sampling.py
+
+# Cheap, observationally independent diffraction hypotheses
+uv run python scripts/keck_p3_pupil_audit.py \
+  --fits "/path/to/n0120.fits" \
+  --calib "p3/aoSystem/data/KECK_CALIBRATION" \
+  --output results/n0120_P3_diffraction
+
+# Historical pupil/rotation baseline with TT ablated
+uv run python scripts/keck_n0013_smoke.py \
+  --fits "/path/to/n0120.fits" \
+  --sav "/path/to/n0120_LGS_trs.sav" \
+  --calib "p3/aoSystem/data/KECK_CALIBRATION" \
+  --output results/n0120_P3_legacy \
+  --n-layer 7 --disable-tt-jitter \
+  --p3-pupil-resampling legacy --p3-pupil-rotation header
+
+# Same physical/geometric inputs, bounded pupil interpolation only
+uv run python scripts/keck_n0013_smoke.py \
+  --fits "/path/to/n0120.fits" \
+  --sav "/path/to/n0120_LGS_trs.sav" \
+  --calib "p3/aoSystem/data/KECK_CALIBRATION" \
+  --output results/n0120_P3_bounded \
+  --n-layer 7 --disable-tt-jitter \
+  --p3-pupil-resampling physical_binary --p3-pupil-rotation header
+```
+
+Compare the files `p3_model_pupil_diagnostics.json`,
+`metadata.json`, `comparison_nirc2_psfr.png`,
+`diffraction_otf.npy` and `telemetry_only_psf.npy`
+when present. Verify that both runs share exactly the same
+r0/L0, Cn2 profile, TT ablation, DM, wavelength bins and
+calibration. Compare pupil effective area and diffraction
+spike directions, not merely the visually sharpest image.
+Only after that assess alternate angle hypotheses; no
+automatic 'best' is selected. Do not compare diffraction
+patterns for different masks as proof of a rotation sign.
+
+### Remaining physical calibration gate
+
+**The mask zero-angle, parity, physical pixels-to-metres scale
+and NIRC2 optical path/moving mask angle have not been
+independently verified.** KAON 1160 supplies a *rotation
+difference convention*, not an absolute FITS pupil registration.
+The pupil binary remapping is numerically motivated, but
+not an on-sky absolute orientation calibration. Use
+multi-acquisition diffraction directions to decide the
+proper image-array and telescope physical transform.
+
+P3 branch regression tests for this increment:
+`tests/test_keck_p3_pupil_audit.py`,
+`tests/test_keck_p3_pupil_sampling.py`.
+The full project test suite and the on-sky n0120 runs
+have not been executed in this environment.
