@@ -206,7 +206,7 @@ def test_modal_covariance_small_negative_psd_projection_is_explicit_and_audited(
         modes2Otf(matrix, modes, pupil, n_otf=16, samp=2)
 
     details = {}
-    with pytest.warns(RuntimeWarning, match="exploratory PSD regularization"):
+    with pytest.warns(RuntimeWarning, match="explicit PSD regularization"):
         otf, sf = modes2Otf(
             matrix, modes, pupil, n_otf=16, samp=2,
             covariance_psd_policy="small_negative",
