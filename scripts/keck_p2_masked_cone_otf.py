@@ -55,7 +55,29 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.keck_l0_cone_sweep import load_geometry
-from scripts.keck_p2_cone_modal_reference import independent_modal_budget
+
+
+def load_case_geometry(case: Path):
+    """Load a completed P2 smoke run, including its analytic Hardy reference.
+
+    The L0 sweep loader returns atmospheric/OTF geometry but deliberately
+    does not flatten Hardy WFE. This script needs the same reference for
+    output metrics, so transfer it explicitly and validate its units.
+    """
+    g = load_geometry(Path(case))
+    raw = g["aniso"].get("hardy_cone_wfe_nm")
+    if raw is None:
+        raise ValueError(
+            "Missing hardy_cone_wfe_nm in anisoplanatism_diagnostics.json; "
+            "regenerate the P2 diagnostics before running this prototype"
+        )
+    hardy_nm = float(raw)
+    if not np.isfinite(hardy_nm) or hardy_nm <= 0:
+        raise ValueError(
+            "Invalid Hardy cone WFE [nm] in anisoplanatism diagnostics"
+        )
+    g["hardy_wfe_nm"] = hardy_nm
+    return g
 
 
 def _numeric_ini_value(cfg, section, key, fallback=None):
@@ -497,7 +519,7 @@ def main():
         help="Comma-separated L0 in m; default measured and inf."
     )
     args = parser.parse_args()
-    g = load_geometry(args.case)
+    g = load_case_geometry(args.case)
     sizes = [int(s.strip()) for s in args.grid_sizes.split(",")]
     if not sizes or any(n < 5 or n%2 == 0 for n in sizes):
         parser.error("Grid axis sizes must all be odd integers >=5")
