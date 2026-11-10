@@ -570,6 +570,14 @@ def main():
         help=("Diagnostic ablation only: omit TT jitter from PSF-R OTF, "
               "without changing other components or fitting observations"),
     )
+    parser.add_argument(
+        "--p1-only", action="store_true",
+        help=(
+            "After systemDiagnosis export P1 modal-noise and Zernike variance "
+            "diagnostics, then stop BEFORE constructing a PSF. "
+            "Production atmospheric estimator remains unchanged."
+        ),
+    )
     args = parser.parse_args()
     with args.config.open("rb") as conf_file:
         full_config = tomllib.load(conf_file)
@@ -759,6 +767,23 @@ def main():
     (args.output / "atmosphere_reconstruction_audit.json").write_text(
         json.dumps(atmosphere_audit, indent=2), encoding="utf-8"
     )
+    if args.p1_only:
+        # P1 research is deliberately isolated from the forward PSF-R.
+        # The archived n0120 1/7-layer P2 outputs remain untouched if
+        # the user supplies a dedicated --output folder.
+        from keck_p1_modal_noise_audit import analyse_diagnosis, write_audit
+        audit = stage(
+            "P1 modal/Zernike/noise audit",
+            lambda: analyse_diagnosis(sd)
+        )
+        write_audit(audit, args.output)
+        print(
+            "[P1-only] Complete; no PSF reconstruction, no fitting of "
+            "science image, no changes to r0/L0 estimator. "
+            f"flags={audit['quality_flags']}",
+            flush=True,
+        )
+        return
     print("[Atmosphere / r0]", {
         k: atmosphere_audit[k] for k in (
             "r0_tel_m_at_atmosphere_wavelength",
