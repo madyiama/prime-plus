@@ -334,6 +334,59 @@ Decision rules:
   uses the segmented/masked Keck pupil and a finite square actuator
   grid in its nonstationary stationarisation.
 
+### 2.8. n0120 infinite-L0 sweep: finite outer scale does not close Hardy gap
+
+User-executed `l0_cone_sweep.json`, with a one-layer Keck n0120 source,
+records **baseline relative error=0** at the production L0=31.045692m.
+The comparison holds WFS `r0=0.4391188896m` at 1.53um, actuator grid
+nActu1D=21, nOtf=128, sampling=3.0231069, and actual NIRC2
+diffraction OTF fixed.
+
+| L0 [m] | Flicker pupil-SF WFE [nm] | Flicker SR-equivalent [nm] | Hardy [nm] |
+|---:|---:|---:|---:|
+| 31.04569 | 237.5777 | 236.4439 | 312.4173 |
+| 100 | 245.3324 | 243.6726 | 312.4173 |
+| 300 | 249.6016 | 247.5172 | 312.4173 |
+| 1000 | 252.6562 | 250.2096 | 312.4173 |
+| infinity | 258.6954 | 255.4047 | 312.4173 |
+
+Thus L0 explains **25.5% of the initial variance gap** and only
+**28.2% of the RMS WFE gap**, leaving 53.72nm RMS/31.4% of Hardy's
+phase variance unaccounted for even in the Kolmogorov limit.
+Jensen's nonlinear Strehl conversion is a small, separately accounted
+effect. This does not prove a defect in either analytic or numeric
+phase-covariance model because the geometries and modal content
+are not yet matched.
+
+**New likely spatial-grid inconsistency in legacy `focal_angular_function`:**
+The Keck run has nActu1D=21 -> `n_ph=43`.
+The code uses `umax=D/2*samp/2=7.93565564m` and its
+pupil-coordinate sampling is
+`x_i=umax*(i-21)/43`, covering +/-3.87555m.
+The separation map sent to `interpolateSupport(cmap,128)` therefore
+covers +/-7.75111m.
+The downstream science OTF, built by padding the actual Keck pupil with
+`pupil2otf(..., samp=3.0231069)`, has an inferred full-grid
+half-width `D*samp/2=15.87131m`.
+The **inferred map-to-OTF lag span ratio is 0.48837209**. This is not
+metadata preserved by `scipy.ndimage.zoom`: it simply stretches array
+indices and does not carry physical separation coordinates.
+Consequently a stationary synthetic `Dphi(rho)~|rho|^(5/3)` that is
+sampled on the legacy covariance grid and resized to 128 has only
+roughly ~31-32% of its physically expected amplitude at OTF lag
+offset 25-40px. That demonstration is a **grid calibration
+discriminant**, NOT an estimate of the correction required for the
+actual nonstationary LGS focal cone.
+
+`keck_l0_cone_sweep.py` now reports
+`flicker_to_otf_lag_geometry` with physical half-spans and warnings.
+**Do not arbitrarily rescale Dphi or L0.** Next validate the exact
+pupil2otf lag coordinate and interpolate the pairwise nonstationary
+covariance with explicit physical lag axes. Only after this test should
+the more expensive true-pupil pair weighting / average-before-exponential
+issue be assessed. The production `focal_angular_function` at finite
+L0 and `matrix_to_map` are unchanged in the current experiment.
+
 ## 3. Keck II NIRC2 pupil angle
 
 KAON 1160 (Ragland, 2017), equations (1) and (2):
