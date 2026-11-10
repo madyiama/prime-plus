@@ -507,6 +507,23 @@ def main():
         ),
         "fitted_L0_m": float(sd.trs.atm.L0_tel),
         "r0_fit_uncertainty_m": float(sd.trs.atm.dr0_tel),
+        "fitted_L0_uncertainty_m": float(sd.trs.atm.dL0_tel),
+        "r0_fit_success": bool(sd.res_r0.success),
+        "r0_fit_cost": float(sd.res_r0.cost),
+        "r0_fit_nfev": int(sd.res_r0.nfev),
+        "r0_fit_active_parameter_bounds": (
+            np.asarray(sd.res_r0.active_mask, dtype=int).tolist()
+        ),
+        "r0_fit_L0_at_upper_bound": bool(
+            np.isclose(float(sd.trs.atm.L0_tel), 100.0, rtol=0, atol=1e-4)
+        ),
+        "r0_tel_over_dimm": (
+            float(sd.trs.atm.r0_tel) / (
+                0.976 * (180*3600/np.pi) * float(sd.trs.atm.wvl)
+                / float(sd.trs.atm.seeing_dimm)
+            )
+            if sd.trs.atm.seeing_dimm > 0 else None
+        ),
         "pseudo_open_loop": {
             "delay_frames": float(sd.trs.dm.pseudo_ol_delay_frames),
             "frames_used": int(sd.trs.dm.pseudo_ol_frames_used),
