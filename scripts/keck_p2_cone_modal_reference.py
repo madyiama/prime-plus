@@ -125,6 +125,14 @@ def independent_modal_budget(geometry, n_grid: int, pupil="circle",
     nm_per_rad = geometry["wavelength_m"]*1e9/(2*np.pi)
     f = lambda variance: float(np.sqrt(max(variance, 0.0))*nm_per_rad)
     hardy = geometry["hardy_wfe_nm"]
+    h_ratio = geometry["heights_m"]/geometry["lgs_height_m"]
+    # Sasiela 2007 Eq. 6.196: piston removed only.
+    # Eq. 6.197 removes piston AND tilt and reproduces Hardy's 0.452.
+    analytic_piston_var = (
+        (geometry["diameter_m"]/geometry["r0_m"])**(5.0/3.0)
+        * np.dot(geometry["weights"],
+                 (0.5*h_ratio**(5.0/3.0)-0.0835*h_ratio**2)/0.423)
+    )
     return {
         "pupil": pupil,
         "grid_axis_points": int(n_grid),
@@ -136,6 +144,11 @@ def independent_modal_budget(geometry, n_grid: int, pupil="circle",
         "tilt_contribution_wfe_nm": f(tilt_contribution),
         "piston_and_tilt_removed_variance_rad2": float(piston_tilt_removed),
         "piston_and_tilt_removed_wfe_nm": f(piston_tilt_removed),
+        "sasiela_analytic_piston_only_wfe_nm": f(analytic_piston_var),
+        "relative_difference_vs_sasiela_piston_only": (
+            f(piston_removed)/f(analytic_piston_var)-1.0
+            if analytic_piston_var > 0 else None
+        ),
         "hardy_piston_and_tilt_removed_wfe_nm": hardy,
         "relative_difference_vs_hardy": f(piston_tilt_removed)/hardy-1.0,
     }
