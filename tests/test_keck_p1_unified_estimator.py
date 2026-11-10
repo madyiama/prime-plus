@@ -16,6 +16,8 @@ from p3.telemetry.seeingEstimator import (
     estimate_r0,
     modified_dm_projection,
     spectral_command_noise_variance,
+    dm_influence_for_resolution,
+    closed_loop_modal_psd_audit,
 )
 
 
@@ -233,3 +235,58 @@ def test_dm_theory_uses_angular_physical_pitch_in_comparing_models():
     np.testing.assert_allclose(
         b/a, (0.20/0.10)**(5/3), rtol=1e-10
     )
+
+
+
+def test_regenerated_dm_influence_grid_preserves_original_if_and_physics():
+    from p3.aoSystem.deformableMirror import deformableMirror
+    dm = deformableMirror(
+        [7], [0.5], heights=[0.0], mechCoupling=[0.11],
+        modes="gaussian",
+    )
+    native_if = dm.setInfluenceFunction(51)
+    native_copy = native_if.copy()
+    trs = NS(
+        tel=NS(resolution=51),
+        mat=NS(dmIF=native_if),
+        dm=NS(
+            nActuators=[7], pitch=[0.5], heights=[0.0],
+            mechCoupling=[0.11], modes="gaussian",
+        ),
+    )
+    original, n1, label1 = dm_influence_for_resolution(trs)
+    higher, n2, label2 = dm_influence_for_resolution(trs, 101)
+    assert n1 == 51 and n2 == 101
+    assert original.shape == (51**2, 7**2)
+    assert higher.shape == (101**2, 7**2)
+    assert label1 == "original_telemetry_keck_if"
+    assert label2 == "regenerated_from_keck_dm_calibration"
+    np.testing.assert_array_equal(original, native_copy)
+    np.testing.assert_array_equal(trs.mat.dmIF, native_copy)
+    assert higher[(101**2)//2, 24] > 0.9
+    assert original[(51**2)//2, 24] > 0.9
+    with pytest.raises(ValueError, match="spatial resolution"):
+        dm_influence_for_resolution(trs, 302)
+
+
+def test_psd_closed_loop_diagnostic_is_not_falsely_an_estimator():
+    rng = np.random.default_rng(29)
+    fs = 1000
+    frame = rng.normal(size=(2**14, 4))*0.05
+    saved = frame.copy()
+    freq = np.linspace(0, fs/2, 251)
+    unity = closed_loop_modal_psd_audit(
+        frame, fs, freq, np.ones_like(freq)
+    )
+    assert abs(unity["welch_variance_relative_error"]) < .10
+    assert unity["fraction_command_psd_at_CTF_power_below_half"] == 0
+    assert unity["command_PSD_weighted_CTF_power"] == pytest.approx(
+        1., abs=1e-12
+    )
+    assert unity["temporal_turbulence_correction_applied"] is False
+    np.testing.assert_array_equal(frame, saved)
+
+    low_pass = np.exp(-freq/150)
+    audit = closed_loop_modal_psd_audit(frame, fs, freq, low_pass)
+    assert audit["fraction_command_psd_at_CTF_power_below_half"] > 0.5
+    assert audit["command_PSD_weighted_CTF_power"] < 1.0
