@@ -58,7 +58,8 @@ class psfR:
     # INIT
     def __init__(self, trs, path_root='', nLayer=None, theta_ext=0,
                  compute_dphi_jitter=True, tt_covariance_mode='legacy_psfr',
-                 tt_mirror_model='unity', tt_welch_nperseg=512):
+                 tt_mirror_model='unity', tt_welch_nperseg=512,
+                 ho_covariance_policy='strict'):
         """
         Instantiating the psf-reconstruction model from a telemetry object
         """
@@ -82,6 +83,12 @@ class psfR:
         self.tt_covariance_mode = tt_covariance_mode
         self.tt_mirror_model = tt_mirror_model
         self.tt_welch_nperseg = int(tt_welch_nperseg)
+        if ho_covariance_policy not in ('strict', 'small_negative'):
+            raise ValueError("Unknown HO covariance policy: " + str(ho_covariance_policy))
+        if ho_covariance_policy != 'strict' and str(trs.aoMode).upper() != 'NGS':
+            raise ValueError("HO small-negative regularization is exploratory and NGS-only")
+        self.ho_covariance_policy = ho_covariance_policy
+        self.ho_covariance_diagnostics = {}
         self.ao = aoSystem(self.path_ini, path_root=path_root)
 
         # defining the number of model parameters
@@ -237,11 +244,15 @@ class psfR:
         Cao = (2*np.pi/self.freq.wvlRef)**2 * (self.Cao - self.trs.wfs.Cn_ao)
 
         # Computing the phase structure function
-        _, dphi_ao = psfrUtils.modes2Otf(Cao, self.trs.mat.dmIF,
-                                         self.ao.tel.pupil,
-                                         self.freq.nOtf,
-                                         basis=basis,
-                                         samp=self.freq.sampRef)
+        _, dphi_ao = psfrUtils.modes2Otf(
+            Cao, self.trs.mat.dmIF,
+            self.ao.tel.pupil,
+            self.freq.nOtf,
+            basis=basis,
+            samp=self.freq.sampRef,
+            covariance_psd_policy=getattr(self, 'ho_covariance_policy', 'strict'),
+            covariance_diagnostics=getattr(self, 'ho_covariance_diagnostics', None),
+        )
 
         return dphi_ao
 
