@@ -180,6 +180,55 @@ def main():
         values.append(value)
     geom = load_geometry(args.case, args.n_actu)
     rows = sweep_outer_scale(geom, values)
+    # Cross-check the *physical* separation support on which the
+    # nonstationary Flicker phase covariance was sampled before
+    # matrix_to_map() and interpolateSupport(). This is NOT a change
+    # to the PSF model: it exposes a likely factor-two spatial
+    # resampling mismatch so it can be tested independently.
+    n_ph = 2 * geom["n_actu"] + 1
+    d = geom["diameter_m"]
+    samp = geom["samp_ref"]
+    umax = d/2.0 * max(1.0, samp)/2.0
+    pupil_coordinate_half_span = umax * (n_ph//2) / n_ph
+    flicker_lag_half_span = umax * (n_ph - 1) / n_ph
+    otf_lag_half_span = d * samp/2.0
+    grid_geometry = {
+        "flicker_internal_grid_points_1d": n_ph,
+        "flicker_pupil_coordinate_half_span_m": pupil_coordinate_half_span,
+        "physical_pupil_radius_m": d/2.0,
+        "flicker_pre_interpolation_lag_half_span_m": flicker_lag_half_span,
+        "otf_lag_half_span_inferred_from_pixel_scale_m": otf_lag_half_span,
+        "flicker_map_to_otf_lag_span_ratio": (
+            flicker_lag_half_span / otf_lag_half_span
+        ),
+        "flicker_sampled_pupil_radius_over_physical_radius": (
+            pupil_coordinate_half_span / (d/2.0)
+        ),
+        "interpretation": (
+            "Current focal_angular_function samples covariance on "
+            "u_i = D*max(1,samp)/(4*n_ph) * (i - n_ph//2), "
+            "builds a (2*n_ph-1)-wide separation map, and resizes it "
+            "to nOtf WITHOUT physical-coordinate metadata. The target "
+            "OTF pixel lag scale is D*samp/nOtf. A span ratio far from "
+            "one is a potential physical lag-axis mismatch, not proof "
+            "that the covariance normalization itself is wrong. "
+            "A separate coordinate-consistent aperture test is needed."
+        ),
+    }
+    if not np.isclose(
+        grid_geometry["flicker_map_to_otf_lag_span_ratio"],
+        1.0, rtol=0.05
+    ):
+        print(
+            "[WARNING: focal cone lag grid] Current Flicker separation "
+            "map spans "
+            f"{flicker_lag_half_span:.4f} m while the OTF grid spans "
+            f"{otf_lag_half_span:.4f} m; ratio "
+            f"{flicker_lag_half_span/otf_lag_half_span:.5f}. "
+            "Do NOT renormalize Hardy or apply a pupil twice; "
+            "investigate physical-coordinate interpolation.",
+            flush=True,
+        )
     original = geom["aniso"].get("pupil_sf_bridge_focal_only") or {}
     baseline = next((
         row for row in rows
@@ -207,6 +256,7 @@ def main():
         "r0_m": geom["r0_m"],
         "sampling": geom["samp_ref"],
         "n_otf": geom["otf_size"],
+        "flicker_to_otf_lag_geometry": grid_geometry,
         "baseline_relative_wfe_error_vs_original_run": baseline_rel_error,
         "baseline_warning": (
             "A mismatch at the original L0 means the standalone setup "
