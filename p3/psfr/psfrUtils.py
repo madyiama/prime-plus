@@ -104,7 +104,8 @@ def mkotf_indpts(nU1d,nPh,u1D,loc,dp):
 
     return indptsc,indptsc2
 
-def modes2Otf(Cmm, modes, pupil, n_otf, samp=2, basis='Vii'):
+def modes2Otf(Cmm, modes, pupil, n_otf, samp=2, basis='Vii',
+              covariance_psd_policy='strict', covariance_diagnostics=None):
     """
     Computes the OTF and phase structure function from the covariance matrix
     of given coeffcients and the corresponding modal basis.
@@ -146,16 +147,64 @@ def modes2Otf(Cmm, modes, pupil, n_otf, samp=2, basis='Vii'):
         eigenvalues, eigenvectors = np.linalg.eigh(
             0.5*(covariance+covariance.T)
         )
-        # Roundoff-scale negative eigenvalues are allowed, but a material
-        # negative variance is never converted to a positive contribution.
+        # Strict mode rejects material negative covariance eigenvalues.
+        # The explicitly requested, NGS-only exploratory policy permits a
+        # *bounded* nearest-PSD projection for small noise-subtraction errors.
+        # Reject both one large negative eigenvalue and the accumulated mass
+        # from many small negative eigenvalues.
+        if covariance_psd_policy not in ('strict', 'small_negative'):
+            raise ValueError("Unknown modal covariance PSD policy")
         tolerance = max(1e-12*float(np.max(np.abs(eigenvalues))), 1e-24)
-        if np.min(eigenvalues) < -tolerance:
+        negative_values = -eigenvalues[eigenvalues < -tolerance]
+        negative_mass = float(np.sum(negative_values))
+        positive_mass = float(np.sum(eigenvalues[eigenvalues > 0]))
+        negative_mode_fraction = (
+            float(np.max(negative_values)) / max(float(np.max(eigenvalues)), 1e-30)
+            if negative_values.size else 0.0
+        )
+        negative_trace_fraction = negative_mass / max(positive_mass, 1e-30)
+        # 0.5% is an explicit engineering diagnostic budget, NOT a
+        # statistically justified confidence interval or Keck calibration.
+        projection_limit = 0.005
+        can_regularize = (
+            covariance_psd_policy == 'small_negative'
+            and negative_mode_fraction <= projection_limit
+            and negative_trace_fraction <= projection_limit
+        )
+        if covariance_diagnostics is not None:
+            covariance_diagnostics.update({
+                'policy': covariance_psd_policy,
+                'lambda_min': float(np.min(eigenvalues)),
+                'lambda_max': float(np.max(eigenvalues)),
+                'negative_mode_count': int(negative_values.size),
+                'negative_eigenvalue_mass': negative_mass,
+                'negative_mode_fraction_of_lambda_max': negative_mode_fraction,
+                'negative_trace_fraction_of_positive_mass': negative_trace_fraction,
+                'maximum_allowed_fraction': projection_limit,
+                'projection_applied': bool(can_regularize and negative_values.size),
+                'units': 'input covariance units',
+                'model_validated_by_projection': False,
+            })
+        if negative_values.size and not can_regularize:
             raise ValueError(
                 "Modal covariance is not positive-semidefinite: "
                 f"lambda_min={np.min(eigenvalues):.6e}, "
                 f"lambda_max={np.max(eigenvalues):.6e}, "
-                f"tolerance={tolerance:.6e} (in input covariance units). "
-                "Review HO noise subtraction before PSF reconstruction"
+                f"tolerance={tolerance:.6e}, "
+                f"negative_trace_fraction={negative_trace_fraction:.6g}. "
+                "Review HO noise subtraction; optional exploratory "
+                "NGS-only policy is small_negative (0.5% spectrum budget)."
+            )
+        if can_regularize and negative_values.size:
+            import warnings
+            warnings.warn(
+                "HO covariance estimated from telemetry has small negative "
+                f"eigenvalues: clipped {negative_values.size} modes, "
+                f"negative_trace_fraction={negative_trace_fraction:.4g}, "
+                f"worst_relative_eigenvalue={negative_mode_fraction:.4g}; "
+                "exploratory PSD regularization, NOT instrument validation.",
+                RuntimeWarning,
+                stacklevel=2,
             )
         ss = np.clip(eigenvalues, 0, None)
         nModes = len(ss)
