@@ -116,6 +116,43 @@ and `295.0nm` for 7 layers. The older 1-vs-7 PSF comparison had a
 test of this physical formula. P2 now saves
 `anisoplanatism_diagnostics.json` with both Hardy and OTF results.
 
+### 2.4. P2 finding: zero-baseline anisoplanatic SF and Strehl
+
+The focal-angular anisoplanatic kernel is made by averaging a spatially
+varying covariance over actuator baselines, then resampling it from an
+odd-size support onto an even-size OTF grid. In the n0120 benchmark before
+DC normalization, the **center sample was not zero**:
+- 1 equivalent layer: `Dphi_ani(0)=0.304339917734454 rad^2`;
+- 7 MASS-DIMM layers: `Dphi_ani(0)=0.1762538469780601 rad^2`.
+
+A true phase structure function satisfies `Dphi(0)=0`; the atmospheric
+OTF must have `OTF_turb(0)=1`. An additive constant `c` in Dphi
+multiplies the complete OTF by `exp(-c/2)` and hence does **not**
+affect the flux-normalized PSF, but incorrectly depresses Strehl values
+calculated directly from the unnormalized OTF and inflates any
+WFE inferred from the integral of that OTF.
+
+The n0120 results gave:
+- apparent `PSFR_SR_OTF_7 / PSFR_SR_OTF_1 = 1.1483352555`;
+- normalized PSF peak ratio `= 1.07709787065`;
+- DC-corrected OTF Strehl ratio:
+  `1.1483352555 * exp(-(0.3043399177-0.1762538470)/2)
+    = 1.0770978565`, agreement to 1.4e-8.
+
+**Correction**: `psfR.phase_structure_function` now computes the
+anisoplanatic SF for each science source and subtracts its central
+OTF sample (independently by source) **after** the atmospheric
+wavelength scaling and weighted sum. The forward PSF morphology is
+unchanged, the OTF DC is one, and the SR/WFE budget is normalized.
+`get_error_breakdown` uses the same zero-lag convention for total,
+angular, tip-tilt anisokinetic, and focal components. The pre-subtraction
+center value is saved to `anisoplanatism_diagnostics.json` for audit.
+
+This is an optical normalization requirement, not a calibration knob,
+and does not establish the accuracy of the underlying focal-angular
+spatial covariance interpolation away from zero baseline. Separate
+synthetic tests must check the anisoplanatic SF shape under finite L0.
+
 ## 3. Keck II NIRC2 pupil angle
 
 KAON 1160 (Ragland, 2017), equations (1) and (2):
