@@ -283,7 +283,16 @@ def focal_angular_function(tel, atm, src, gs, nActu, nOtf, samp, h_filt=1):
 
     #1\ Grabbing inputs
     umax = tel.D/2 * max([1,samp])/2
-    f0 = 2*np.pi/atm.L0
+    # The exact Kolmogorov limit must be evaluated analytically, NOT by
+    # setting L0 to an enormous finite value: the McDonald covariance
+    # terms individually approach 3/5 and their alternating sum loses
+    # precision after multiplication by L0**(5/3).
+    outer_scale = float(atm.L0)
+    if not (outer_scale > 0 or np.isposinf(outer_scale)):
+        raise ValueError("Outer scale must be positive or +infinity")
+    kolmogorov_limit = bool(np.isposinf(outer_scale))
+    if not kolmogorov_limit:
+        f0 = 2*np.pi/outer_scale
     dist = [ src.direction[0] - gs.direction[0],
               src.direction[1] - gs.direction[1]]
 
@@ -318,9 +327,19 @@ def focal_angular_function(tel, atm, src, gs, nActu, nOtf, samp, h_filt=1):
     _, _, sep_x, sep_y = vector_to_separation(np.array(range(n_ph)))
 
     # Instantiation
-    I0 = 3.0/5.0
-    I1 = FourierUtils.Ialpha(f0*rhoX, f0*rhoY)
-    cte = 0.12184*0.06*(2*np.pi)**2 * atm.L0**(5/3)
+    if kolmogorov_limit:
+        # Ialpha(z) = 3/5 - a*z**(5/3) + higher-order terms,
+        # a = -Gamma(-5/6)/(2**(8/3)*Gamma(11/6)).
+        # Thus L0**(5/3)*(Ialpha(0)-Ialpha(2*pi*r/L0))
+        # tends exactly to a*(2*pi*r)**(5/3).
+        nu = 5.0/6.0
+        a = (-spc.gamma(-nu)
+             / (2.0**(2.0*nu+1.0)*spc.gamma(1.0+nu)))
+        cte = 0.12184*0.06*(2*np.pi)**(2.0+5.0/3.0)*a
+    else:
+        I0 = 3.0/5.0
+        I1 = FourierUtils.Ialpha(f0*rhoX, f0*rhoY)
+        cte = 0.12184*0.06*(2*np.pi)**2 * outer_scale**(5.0/3.0)
 
     # Anisoplanatism Structure Function
     for iSrc in range(src.nSrc):
@@ -329,17 +348,36 @@ def focal_angular_function(tel, atm, src, gs, nActu, nOtf, samp, h_filt=1):
         for l, zl in enumerate(atm.heights):
             if zl:
                 g = zl/gs.height
-                I2 = FourierUtils.Ialpha(f0*(rhoX*(1-g)),
-                                         f0*(rhoY*(1-g)))
-                I3 = FourierUtils.Ialpha(f0*(rhoX - g*X1 + zl*thx),
-                                         f0*(rhoY - g*Y1 + zl*thy))
-                I4 = FourierUtils.Ialpha(f0*(g*X1 - zl*thx),
-                                         f0*(g*Y1 - zl*thy))
-                I5 = FourierUtils.Ialpha(f0*(g*(rhoX-X1) - zl*thx),
-                                         f0*(g*(rhoY-Y1) - zl*thy))
-                I6 = FourierUtils.Ialpha(f0*((1-g)*rhoX + g*X1 - zl*thx),
-                                         f0*((1-g)*rhoY + g*Y1 - zl*thy))
-                tmp = 2*I0 - I1 - I2 + I3 - I4 - I5 + I6
+                if kolmogorov_limit:
+                    # Exact L0 -> infinity limit of the same six-term
+                    # Flicker covariance, preserving its spatial dependence
+                    # on both pupil coordinates and point-pair baseline.
+                    p = lambda x, y: np.hypot(x, y)**(5.0/3.0)
+                    tmp = (
+                        p(rhoX, rhoY)
+                        + p((1-g)*rhoX, (1-g)*rhoY)
+                        - p(rhoX - g*X1 + zl*thx,
+                            rhoY - g*Y1 + zl*thy)
+                        + p(g*X1 - zl*thx, g*Y1 - zl*thy)
+                        + p(g*(rhoX-X1) - zl*thx,
+                            g*(rhoY-Y1) - zl*thy)
+                        - p((1-g)*rhoX + g*X1 - zl*thx,
+                            (1-g)*rhoY + g*Y1 - zl*thy)
+                    )
+                else:
+                    I2 = FourierUtils.Ialpha(f0*(rhoX*(1-g)),
+                                             f0*(rhoY*(1-g)))
+                    I3 = FourierUtils.Ialpha(f0*(rhoX - g*X1 + zl*thx),
+                                             f0*(rhoY - g*Y1 + zl*thy))
+                    I4 = FourierUtils.Ialpha(f0*(g*X1 - zl*thx),
+                                             f0*(g*Y1 - zl*thy))
+                    I5 = FourierUtils.Ialpha(f0*(g*(rhoX-X1) - zl*thx),
+                                             f0*(g*(rhoY-Y1) - zl*thy))
+                    I6 = FourierUtils.Ialpha(
+                        f0*((1-g)*rhoX + g*X1 - zl*thx),
+                        f0*((1-g)*rhoY + g*Y1 - zl*thy)
+                    )
+                    tmp = 2*I0 - I1 - I2 + I3 - I4 - I5 + I6
                 if not np.isscalar(h_filt):
                     tmp = np.dot(h_filt, np.dot(tmp, h_filt_t))
 
