@@ -199,3 +199,37 @@ def test_physical_phase_structure_sampling_changes_reference_model():
         _model_modal_variance(
             probe, 9.0, 31.0, 10.5, pixel_pitch_m=0
         )
+
+
+
+def test_log_variance_least_squares_uses_mean_not_median_log_ratio():
+    # With a skewed log ratio distribution, the median is NOT the
+    # minimizer of the mean squared logarithmic residual.
+    scale = np.array([1., 1., 100.])
+    base = np.array([1., 2., 3.])
+    models = [base, base*1.2, base*1.5]
+    best, profile, _ = _fit_amplitude(
+        base*scale, models,
+        np.array([9, 10, 12]), np.array([3,3,4]),
+        9.0, [10., 20., 30.],
+    )
+    expected = np.exp(np.mean(np.log(scale)))
+    assert profile[0]["amplitude_D_over_r0_to_5_3"] == pytest.approx(
+        expected, rel=1e-12
+    )
+
+
+def test_dm_theory_uses_angular_physical_pitch_in_comparing_models():
+    n = 11
+    y, x = np.indices((n, n), dtype=float)
+    probe = (x-(n-1)/2)[None, :, :]
+    probe = probe-probe.mean()
+    a = _model_modal_variance(
+        probe, 9.0, np.inf, 10.5, pixel_pitch_m=0.10
+    )
+    b = _model_modal_variance(
+        probe, 9.0, np.inf, 10.5, pixel_pitch_m=0.20
+    )
+    np.testing.assert_allclose(
+        b/a, (0.20/0.10)**(5/3), rtol=1e-10
+    )
