@@ -9,6 +9,24 @@ import numpy as np
 import os
 from configparser import ConfigParser
 
+
+def _format_numeric_vector(values, name):
+    """Round-trip NumPy/list atmosphere arrays through a plain INI literal.
+
+    str(np.ndarray) uses whitespace-separated elements, which are not a
+    Python list and are not parseable by aoSystem._parse_config_value.
+    Convert every entry to a built-in float before writing.  No change
+    to numerical values or Cn2 normalization is made.
+    """
+    try:
+        array = np.asarray(values, dtype=float)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must contain numeric values") from exc
+    if array.ndim != 1 or array.size == 0 or not np.all(np.isfinite(array)):
+        raise ValueError(f"{name} must be a finite nonempty 1-D numeric vector")
+    return repr([float(v) for v in array])
+
+
 class configFile():
 
 
@@ -52,10 +70,18 @@ class configFile():
         parser.set('atmosphere','Wavelength', str(sysdiag.trs.atm.wvl))
         parser.set('atmosphere','Seeing', str(sysdiag.trs.atm.seeing))
         parser.set('atmosphere','L0', str(sysdiag.trs.atm.L0))
-        parser.set('atmosphere','Cn2Weights', str(sysdiag.trs.atm.Cn2Weights))
-        parser.set('atmosphere','Cn2Heights', str(sysdiag.trs.atm.Cn2Heights))
-        parser.set('atmosphere','WindSpeed', str(sysdiag.trs.atm.wSpeed))
-        parser.set('atmosphere','WindDirection', str(sysdiag.trs.atm.wDir))
+        parser.set('atmosphere','Cn2Weights', _format_numeric_vector(
+            sysdiag.trs.atm.Cn2Weights, 'Cn2Weights'
+        ))
+        parser.set('atmosphere','Cn2Heights', _format_numeric_vector(
+            sysdiag.trs.atm.Cn2Heights, 'Cn2Heights'
+        ))
+        parser.set('atmosphere','WindSpeed', _format_numeric_vector(
+            sysdiag.trs.atm.wSpeed, 'WindSpeed'
+        ))
+        parser.set('atmosphere','WindDirection', _format_numeric_vector(
+            sysdiag.trs.atm.wDir, 'WindDirection'
+        ))
 
         #%% SCIENCE SOURCES
         # updating the imager config
@@ -205,7 +231,9 @@ class configFile():
             parser.add_section('external')
         parser.set('external','Seeing', str(sysdiag.trs.atm.seeing_dimm))
         parser.set('external','SeeingAlt', str(sysdiag.trs.atm.seeing_mass))
-        parser.set('external','Cn2Weights', str(sysdiag.trs.atm.Cn2_mass))
+        parser.set('external','Cn2Weights', _format_numeric_vector(
+            sysdiag.trs.atm.Cn2_mass, 'external Cn2Weights'
+        ))
 
         #%% WRITING
         with open(self.path_ini, 'w') as configfile:
