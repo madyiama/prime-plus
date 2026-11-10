@@ -357,6 +357,12 @@ def main():
     expected_tilt_gain = diameter * np.pi / (180 * 3600) / 4
     slope_measured = np.asarray(sd.trs.tipTilt.slopes, dtype=float)
     slope_covariance = slope_measured.T @ slope_measured / len(slope_measured)
+    is_ngs = str(trs.aoMode).upper() == "NGS"
+    if is_ngs:
+        print("[NGS TT geometry] Historical RESIDUALWAVEFRONT conversion is "
+              f"{original_tilt_gain / expected_tilt_gain:.3g} times the LGS "
+              "Noll-angle conversion; raw NGS units are unverified. "
+              "No angular mas RMS is certified.", flush=True)
     spatial_diagnostics = {
         "reference_wavelength_m": ref_wavelength,
         "science_wavelength_bins_m": np.asarray(model.freq.wvl_, dtype=float).tolist(),
@@ -374,13 +380,22 @@ def main():
         "psd_frequency_step_inv_m": float(model.freq.PSDstep),
         "psd_frequency_step_expected_inv_m": expected_psd_step,
         "dm_cutoff_max_inv_m": float(model.freq.kcMax_),
+        "tt_signal_origin": (
+            "RESIDUALWAVEFRONT" if is_ngs else "DTTCENTROIDS"
+        ),
         "straptiptilt_opd_gain_m_per_arcsec": original_tilt_gain,
         "noll_tilt_opd_gain_expected_m_per_arcsec": expected_tilt_gain,
+        "ngs_tt_scale_ratio_to_lgs_noll": (
+            float(original_tilt_gain / expected_tilt_gain) if is_ngs else None
+        ),
         "straptiptilt_raw_measured_covariance_trace_m2": float(
             np.trace(slope_covariance)
         ),
-        "straptiptilt_raw_rms_per_axis_mas": float(
-            1000 * np.sqrt(np.trace(slope_covariance) / 2) / expected_tilt_gain
+        "straptiptilt_raw_rms_per_axis_mas": (
+            None if is_ngs else float(
+                1000 * np.sqrt(np.trace(slope_covariance) / 2)
+                / expected_tilt_gain
+            )
         ),
         "tt_wavelength_model": (
             "Angular covariance independent of wavelength; "
