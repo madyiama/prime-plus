@@ -89,6 +89,29 @@ def _plot_comparison(observed, psf_cube, destination, *, dataset_label="Keck/NIR
     plt.close(fig)
 
 
+def _validate_canonical_tt_geometry(diameter_m):
+    """Detect leftover manual 4/D -> 1/D edits before expensive PSF-R.
+
+    The historical no-16 comparison is selected with the explicit
+    tt_kernel_convention option, NOT by editing the shared OPD->angle
+    geometry. Doing both would suppress the TT SF by 256, not 16.
+    """
+    from p3.aoSystem.tipTiltGeometry import opd_covariance_to_angular
+
+    diameter_m = float(diameter_m)
+    test_covariance = np.eye(2, dtype=float)
+    result = opd_covariance_to_angular(test_covariance, diameter_m)
+    expected = (4.0/diameter_m)**2 * test_covariance
+    if not np.allclose(result, expected, rtol=1e-13, atol=0.0):
+        raise ValueError(
+            "Noncanonical TT OPD-to-angle conversion detected. "
+            "tipTiltGeometry.opd_covariance_to_angular must use (4/D)**2 "
+            "for RMS Noll tilts. Restore any local (1/D)**2 edit; "
+            "use --tt-kernel-convention legacy_unscaled_opd for the "
+            "controlled historical 1/16 OTF comparison."
+        )
+
+
 def _telemetry_forward_parameters(model, gho=1.0, gtt=1.0):
     """Build PSF-R's on-axis forward vector for 1 or multiple turbulence layers.
 
@@ -492,6 +515,10 @@ def main():
     )
     print("[Pupil orientation]", pupil_diagnostics, flush=True)
     print("[MASS-DIMM source]", massdimm_diagnostics, flush=True)
+    # This must hold even for a legacy OTF comparison: the physical
+    # angle conversion remains canonical, with /16 applied only once by
+    # --tt-kernel-convention legacy_unscaled_opd.
+    _validate_canonical_tt_geometry(trs.tel.D)
     filter_profile_diagnostics = getattr(
         trs.cam, "filter_profile_diagnostics", {}
     )
