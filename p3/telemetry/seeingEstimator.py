@@ -64,13 +64,14 @@ def modified_dm_projection(
     influence_matrix, diameter_m, resolution, *,
     annular_outer_m=9.0, annular_inner_m=2.65,
     j_start=7, j_stop=120, pinv_rcond=1e-4,
+    dm_pitch_m=0.5625, valid_actuators=None,
 ):
-    """Return DM->modified-Zernike operator and zero-piston phase probes.
+    """Return modified DM Zernikes and piston-free modal phase probes.
 
-    Modes are fitted to the *Keck DM influence functions on the
-    9.0/2.65m annulus*, then reprojected through their own Gram matrix.
-    No Keck science-image pupil is involved. Pupil quadrature uses
-    square pixels of width D/resolution and a uniform annular weight.
+    The actual telescope.py/deformableMirror.py influence-function
+    grid spans (n_actuator_axis-1)*dm_pitch_m, not tel.D. The IDL
+    actuator selection is applied to the nominal 21x21 DM coordinates,
+    NOT to peaks of smoothed, overlapping influence functions.
     """
     from p3.aoSystem.zernike import zernike
 
@@ -83,23 +84,56 @@ def modified_dm_projection(
         raise ValueError("Invalid analysis annulus")
     if j_start < 4 or j_stop < j_start:
         raise ValueError("LGS piston / tip-tilt must not be selected")
-    # Same NIR Keck DM actuator peaks as in Keck calibration: use
-    # a DM-region selection, not the science image pupil mask.
-    pixel_centres = (np.arange(n)-(n-1)/2)*diameter_m/n
+    # In P3's deformableMirror.setInfluenceFunction() the IF grid
+    # is sampled from -10*pitch to +10*pitch for the 21x21 DM,
+    # independent of the science telescope diameter (10.5m).
+    n_act = int(np.sqrt(IF.shape[1]))
+    if (n_act*n_act != IF.shape[1] or n_act % 2 != 1
+            or n_act < 5 or dm_pitch_m <= 0):
+        raise ValueError(
+            "Full odd-axis Keck actuator grid and positive pitch required"
+        )
+    if valid_actuators is not None:
+        active = np.asarray(valid_actuators, dtype=bool).ravel()
+        if active.size != IF.shape[1]:
+            raise ValueError("Keck valid actuator map and IF layout disagree")
+    else:
+        active = np.ones(IF.shape[1], dtype=bool)
+    physical_extent = (n_act-1)*dm_pitch_m
+    sample_pitch = physical_extent/(n-1)
+    pixel_centres = np.linspace(
+        -physical_extent/2, physical_extent/2, n
+    )
     y, x = np.meshgrid(pixel_centres, pixel_centres, indexing="ij")
     r = np.hypot(x, y)
     ann = ((r <= annular_outer_m/2) &
            (r >= annular_inner_m/2))
     nmodes = j_stop-j_start+1
-    # The IDL uses 320 of 349 actuators, selected by DM location
-    # 1.2*pitch < r < 10.05*pitch. Use IF peak positions, preserving
-    # raw indices and flagging if selection differs from 320.
-    peaks = np.argmax(np.abs(IF), axis=0)
-    peak_r = r.ravel()[peaks]
-    selected = np.flatnonzero(
-        (peak_r > 1.2*0.5625) &
-        (peak_r < 10.05*0.5625)
+
+    # Exact IDL 2018 nominal actuator-radius selection on the
+    # Keck 21x21 grid. This gives exactly 320 of the 349 valid
+    # actuators. IF amplitude peaks must NOT decide validity.
+    actuator_coords = (
+        np.arange(n_act)-(n_act-1)/2
+    )*dm_pitch_m
+    ya, xa = np.meshgrid(
+        actuator_coords, actuator_coords, indexing="ij"
     )
+    actuator_radius = np.hypot(xa, ya).ravel()
+    candidate = (
+        (actuator_radius > 1.2*dm_pitch_m) &
+        (actuator_radius < 10.05*dm_pitch_m)
+    )
+    if np.any(candidate & ~active):
+        raise ValueError(
+            "IDL 320 region contains invalid DM actuators"
+        )
+    selected = np.flatnonzero(candidate & active)
+    if n_act == 21 and selected.size != 320:
+        raise ValueError(
+            f"Keck IDL projection requires 320 DM actuators; "
+            f"found {selected.size}"
+        )
     if selected.size < nmodes+3:
         raise ValueError(
             "Insufficient DM actuators for modified Zernike projection"
@@ -135,10 +169,20 @@ def modified_dm_projection(
         "analysis_inner_diameter_m": float(annular_inner_m),
         "telescope_diameter_m": float(diameter_m),
         "pupil_resolution": int(n),
+        "dm_actuator_grid_axis": int(n_act),
+        "dm_pitch_m": float(dm_pitch_m),
+        "dm_influence_extent_m": float(physical_extent),
+        "pupil_sample_pitch_m": float(sample_pitch),
+        "pixels_per_dm_pitch": float(dm_pitch_m/sample_pitch),
+        "actuator_selection": "nominal_IDL_21x21_320_of_349",
+        "valid_actuators_provided": valid_actuators is not None,
     }
 
 
-def _model_modal_variance(probes, diameter_m, outer_scale, telescope_diameter_m):
+def _model_modal_variance(
+    probes, diameter_m, outer_scale, telescope_diameter_m,
+    *, pixel_pitch_m=None,
+):
     """Deterministic phase-covariance quadrature for (D/r0)^5/3=1.
 
     A zero-piston projection q gives:
@@ -150,7 +194,12 @@ def _model_modal_variance(probes, diameter_m, outer_scale, telescope_diameter_m)
     nmod, n, n2 = q.shape
     if n != n2:
         raise ValueError("Phase probes must be square")
-    step = telescope_diameter_m/n
+    step = (
+        telescope_diameter_m/n
+        if pixel_pitch_m is None else float(pixel_pitch_m)
+    )
+    if not np.isfinite(step) or step <= 0:
+        raise ValueError("Invalid physical phase covariance grid pitch")
     diff = np.arange(-n+1, n)*step
     dy, dx = np.meshgrid(diff, diff)
     kernel = -0.5*_phase_sf(
@@ -300,6 +349,8 @@ def estimate_r0(
     calib = modified_dm_projection(
         IF, diameter, int(trs.tel.resolution),
         j_start=j_start, j_stop=j_stop,
+        dm_pitch_m=float(np.asarray(trs.dm.pitch).reshape(-1)[0]),
+        valid_actuators=trs.dm.validActuators,
     )
     act = calib["actuator_indices"]
     U = calib["dm_to_modal"]
@@ -358,7 +409,8 @@ def estimate_r0(
     reference = [
         _model_modal_variance(
             calib["phase_probes"][selectable],
-            calib["analysis_outer_diameter_m"], outer, diameter
+            calib["analysis_outer_diameter_m"], outer, diameter,
+            pixel_pitch_m=calib["pupil_sample_pitch_m"],
         ) for outer in L0_grid
     ]
     best, profile, fit_diag = _fit_amplitude(
@@ -377,6 +429,10 @@ def estimate_r0(
         "annular_outer_diameter_m": calib["analysis_outer_diameter_m"],
         "annular_inner_diameter_m": calib["analysis_inner_diameter_m"],
         "actuator_count": int(len(act)),
+        "actuator_selection": calib["actuator_selection"],
+        "dm_influence_extent_m": calib["dm_influence_extent_m"],
+        "pupil_sample_pitch_m": calib["pupil_sample_pitch_m"],
+        "pixels_per_dm_pitch": calib["pixels_per_dm_pitch"],
         "gram_condition": calib["modified_gram_condition"],
         "selected_Noll_indices": j[selectable].tolist(),
         "excluded_Noll_indices": j[~selectable].tolist(),
