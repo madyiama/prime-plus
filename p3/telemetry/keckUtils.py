@@ -70,10 +70,40 @@ def getScale(hdr):
     else:
         return None
 
+def getPupilAngles(hdr):
+    """Keck II AO Note 1160 (Ragland 2017), for science NIRC2 images.
+
+    The sky position angle on NIRC2 (ROTPOSN - INSTANGL) is NOT the
+    pupil angle. The physical NIRC2 pupil orientation in the note's
+    'hat-top' zero reference is EL - ROTPPOSN. The WFS sees the opposite
+    sign, with a different pupil reference; these values must not be
+    interchanged or assigned to a mask with an unknown reference zero.
+    """
+    required = ('EL', 'ROTPPOSN', 'ROTPOSN', 'INSTANGL')
+    missing = [name for name in required if name not in hdr]
+    if missing:
+        raise ValueError(
+            "Cannot reconstruct Keck NIRC2 pupil orientation: "
+            f"missing FITS keyword(s) {missing}; no sky-PA fallback is physical"
+        )
+    el = float(hdr['EL'])
+    rotpposn = float(hdr['ROTPPOSN'])
+    sky_pa = float(hdr['ROTPOSN']) - float(hdr['INSTANGL'])
+    if not np.all(np.isfinite((el, rotpposn, sky_pa))):
+        raise ValueError("Invalid, non-finite NIRC2 pupil/sky position angle")
+    return {
+        'sky_position_angle_deg': sky_pa,
+        'nirc2_pupil_angle_deg': el - rotpposn,
+        'wfs_pupil_angle_deg': rotpposn - el,
+        'reference': 'KAON1160_NIRC2_hat_top_zero',
+        'mask_zero_offset_calibrated': False,
+        'formula': 'NIRC2 pupil = EL - ROTPPOSN',
+    }
+
+
 def getPA(hdr):
-    #theta = float(hdr['ROTPOSN']) - float(hdr['EL']) - getInstAngle(hdr)
-    theta = float(hdr['ROTPOSN']) - getInstAngle(hdr)
-    return theta
+    """Pupil angle for NIRC2, NOT the camera sky position angle."""
+    return getPupilAngles(hdr)['nirc2_pupil_angle_deg']
 
 def getPupilMask(hdr):
     return hdr['PMSNAME']
