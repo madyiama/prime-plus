@@ -244,6 +244,12 @@ def main():
             / original["pupil_piston_removed_wfe_nm"] - 1
         )
     result = {
+        "modal_comparison_warning": (
+            "Hardy formula removes piston AND tip-tilt, while P3 "
+            "Flicker SF currently removes only piston. Raw numerical "
+            "WFE cannot be expected to converge to Hardy without "
+            "the same tilt removal."
+        ),
         "source_case": str(args.case.resolve()),
         "physics": (
             "P3 focal_angular_function with fixed on-axis Keck geometry; "
@@ -285,7 +291,7 @@ def main():
     x = np.arange(len(rows))
     fig, ax = plt.subplots(figsize=(9, 5.5))
     ax.plot(x, [row["hardy_wfe_nm"] for row in rows],
-            "k--", label="Hardy (Kolmogorov)")
+            "k--", label="Hardy (piston + tilt removed)")
     ax.plot(x, [row["flicker_pupil_wfe_nm"] for row in rows],
             "o-", label="Flicker: pupil-weighted SF RMS")
     ax.plot(x, [row["flicker_strehl_equivalent_wfe_nm"] for row in rows],
