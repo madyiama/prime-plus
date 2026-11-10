@@ -421,6 +421,26 @@ def estimate_r0(
         correct[selectable], reference, j[selectable],
         radial[selectable], calib["analysis_outer_diameter_m"], L0_grid
     )
+    best_index = int(np.argmin([
+        p["log_variance_shape_cost"] for p in profile
+    ]))
+    theoretical = (
+        best["amplitude_D_over_r0_to_5_3"]*reference[best_index]
+    )
+    observed_selected = correct[selectable]
+    noise_fraction_selected = (
+        noise_var[selectable]/np.maximum(measured[selectable], 1e-30)
+    )
+    mode_diagnostics = [{
+        "Noll": int(j_i), "radial_order": int(n_i),
+        "corrected_variance_rad2": float(y_i),
+        "theoretical_variance_rad2": float(t_i),
+        "observed_over_theoretical": float(y_i/t_i),
+        "noise_fraction_of_measured": float(v_i),
+    } for j_i, n_i, y_i, t_i, v_i in zip(
+        j[selectable], radial[selectable], observed_selected,
+        theoretical, noise_fraction_selected,
+    )]
     return {
         "method": "jolissaint",
         "status": "experimental_recomputed_modified_covariance",
@@ -441,6 +461,22 @@ def estimate_r0(
         "selected_Noll_indices": j[selectable].tolist(),
         "excluded_Noll_indices": j[~selectable].tolist(),
         "n_modes_used": int(np.count_nonzero(selectable)),
+        "noise_fraction_selected_variance_trace": float(
+            np.sum(noise_var[selectable])
+            / np.sum(measured[selectable])
+        ),
+        "noise_fraction_selected_mode_median": float(
+            np.median(noise_fraction_selected)
+        ),
+        "noise_fraction_selected_mode_max": float(
+            np.max(noise_fraction_selected)
+        ),
+        "selected_mode_fit_diagnostics": mode_diagnostics,
+        "selected_mode_log_ratio_rms": float(
+            np.sqrt(np.mean(
+                np.log(observed_selected/theoretical)**2
+            ))
+        ),
         "measured_variance_rad2": measured.tolist(),
         "noise_variance_rad2": noise_var.tolist(),
         "corrected_variance_rad2": correct.tolist(),
