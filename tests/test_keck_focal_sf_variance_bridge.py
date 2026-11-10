@@ -84,9 +84,11 @@ def test_structure_function_bridge_rejects_nonzero_dc_and_bad_weights():
     dphi, otf = _example()
     with pytest.raises(ValueError, match="Dphi\\(0\\)=0"):
         _structure_function_wfe_bridge(dphi+0.1, otf, 1.53e-6)
-    otf[0, 0] = -0.1
-    with pytest.raises(ValueError, match="Negative diffraction"):
-        _structure_function_wfe_bridge(dphi, otf, 1.53e-6)
+    otf[0, 0] = -2.0
+    with pytest.warns(RuntimeWarning, match="negative weight mass"):
+        report = _structure_function_wfe_bridge(dphi, otf, 1.53e-6)
+    assert report["diffraction_otf_weights_clipped_for_diagnostic"] is True
+    assert report["diffraction_otf_negative_weight_fraction"] > 1e-3
 
 
 def test_zero_structure_function_gives_unit_strehl_zero_wfe():
