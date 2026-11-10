@@ -187,6 +187,78 @@ across other LGS geometries, finite-`L0` angular-covariance treatment,
 and absolute NIRC2 science-image calibration remain open. This case
 is not a reason to tune `0.452` or another analytical coefficient.
 
+### 2.6. P2 unresolved: why Hardy RMS ≠ Strehl-equivalent RMS
+
+**Do not claim physical closure merely because 1- and 7-layer PSFs have a
+similar trend.** On the controlled n0120 rebaseline, Hardy gives
+312.4173/295.0075 nm (7/1 = 0.94427), while the OTF-derived
+focal-anisoplanatic WFE gives 236.4439/228.0546 nm (7/1 = 0.96452).
+Those ratios are not expected to be identical automatically.
+
+A three-way comparison is required, all at the same wavelength:
+
+1. Hardy analytical Kolmogorov cone phase variance `sigma_Hardy²`.
+2. Pupil-piston-removed variance computed from the **same focal-only
+   pupil-averaged phase SF used by P3**:
+   `sigma_SF² = (1/2) sum(OTF_DL * Dphi_focal) / sum(OTF_DL)`.
+3. Nonlinear Strehl-equivalent variance from that same SF:
+   `sigma_SR² = -log(sum(OTF_DL * exp(-Dphi_focal/2)) / sum(OTF_DL))`.
+
+For a nonnegative diffraction-limited OTF, Jensen's inequality yields
+`sigma_SR² <= sigma_SF²`. The difference between 2 and 3 is a
+mathematical consequence of the nonlinear mapping from SF to Strehl,
+even if there is no physical-model bug. The difference between 1 and 2
+does **not** have this explanation; it diagnoses finite-L0 effects,
+pupil geometry, covariance modeling, filtering/normalization errors,
+or inconsistent heights/laser geometry.
+
+A noteworthy external check: PRIME 2019, Eq. 12 and Section 4.2,
+reported ~158 nm from Hardy and ~162 nm from its fitted anisoplanatism
+transfer function for a 2017 Keck observation
+(https://academic.oup.com/mnras/article/487/4/5450/5519866).
+The roughly 25% absolute RMS discrepancy in n0120 therefore deserves
+a quantitative independent audit. Conditions are different, but
+"different WFE definitions" is not a sufficient closing argument.
+
+**Implementation observations, not assumptions**:
+- `focal_angular_function` uses a finite outer-scale von Karman
+  covariance (`f0=2*pi/L0`; L0 ~31m on n0120).
+- The code constructs `Hfilter` from influence functions in SLAO
+  `psfR.__init__`, but the SLAO branch of
+  `frequencyDomain.anisoplanatismPhaseStructureFunction` calls
+  `anisoplanatism_structure_function` **without forwarding Hfilter**.
+  Consequently the present n0120 cone kernel has `h_filt=1`: DM
+  filtering cannot yet be invoked as an explanation for this run.
+- Atmospheric/lgs geometries are both converted to line-of-sight
+  heights inside `aoSystem`, making their ratio `h/H` invariant to
+  airmass, while `r0` is separately a line-of-sight estimate.
+- The focal-angular SF is baseline averaged and resampled on the OTF
+  support; small negative OTF samples from interpolation are clipped
+  **only in the diagnostic**, never in the forward model. Negative
+  clipped weight mass is explicitly reported.
+- The true phase-SF shape away from zero baseline has not been
+  independently validated by phase-screen Monte Carlo.
+
+The smoke now emits `anisoplanatism_diagnostics.json` with
+`pupil_sf_bridge_focal_only`, `pupil_sf_bridge_total_anisoplanatism`,
+Jensen gap, Hardy-to-linear-SF ratio and model-condition flags, plus
+`focal_anisoplanatism_sf.npy` and `diffraction_otf.npy` to
+enable independent analysis **without a repeated forward model run**.
+`keck_compare_layer_counts.py` compares the bridge quantities from
+the one- and seven-layer outputs.
+
+**Acceptance for P2 theoretical closure**:
+- Jensen inequality passes for both n0120 layer counts.
+- OTF-derived focal-only WFE recomputed from the SF matches the
+  reported error budget after accounting for any signed OTF artifacts.
+- If Hardy and the *linear SF pupil variance* still disagree,
+  investigate matched L0→infinity, identical pupil, laser height and
+  actuator/IF filter assumptions before changing any `0.452`,
+  `0.423` or r0 coefficients.
+- Independent synthetic phase-screen Monte Carlo validates cone
+  covariance and spatial SF with a known Cn2 profile.
+- Only then consider P2 physically closed and move to P1 r0 fitting.
+
 ## 3. Keck II NIRC2 pupil angle
 
 KAON 1160 (Ragland, 2017), equations (1) and (2):
