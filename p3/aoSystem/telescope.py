@@ -57,7 +57,7 @@ class telescope:
                  path_static_pos=None, path_apodizer=None, path_statModes=None,
                  extraErrorNm=0.0, extraErrorExp=-2, extraErrorMin=0.0, extraErrorMax=0.0,
                  extraErrorLoNm=0.0, extraErrorLoExp=-2, extraErrorLoMin=0.0, extraErrorLoMax=0.0,
-                 precision='double', verbose=True):
+                 precision='double', verbose=True, pupil_resampling='legacy'):
 
         # PARSING INPUTS
         self.D = D # primary mirror diameter in meters
@@ -66,6 +66,15 @@ class telescope:
         self.resolution = resolution # pupil resolution in pixels
         self.verbose = verbose
         self.pupilAngle = pupilAngle
+        if pupil_resampling not in ('legacy', 'physical_binary'):
+            raise ValueError("PupilResampling must be legacy or physical_binary")
+        self.pupil_resampling = pupil_resampling
+        self.pupil_resampling_diagnostics = {
+            'method': 'legacy_spline_rotation' if pupil_resampling == 'legacy'
+                      else 'physical_binary_subpixel_area_average',
+            'physical_transmission_bounded': pupil_resampling == 'physical_binary',
+            'zero_angle_parity_calibrated': False,
+        }
         self.path_pupil = path_pupil
         self.path_static_on = path_static_on
         self.zcoef_static_on = zcoef_static_on
@@ -97,8 +106,22 @@ class telescope:
         else:
             raise ValueError(f"precision must be 'single' or 'double', not {precision}")
 
-        def load_and_process_data(path_data):
+        def load_and_process_data(path_data, *, binary_pupil=False):
             data = np.asarray(fits.getdata(path_data), dtype=self.dtype)
+            # Only archived Keck 0/1 masks may use the subpixel area path.
+            # NCPA and apodizers retain their original independent processing.
+            if binary_pupil and self.pupil_resampling == 'physical_binary':
+                from .pupilTransforms import (
+                    resample_binary_pupil, pupil_sampling_diagnostics,
+                )
+                sampled = resample_binary_pupil(
+                    nnp.asarray(data), int(resolution), float(self.pupilAngle),
+                    supersample=4,
+                )
+                self.pupil_resampling_diagnostics = pupil_sampling_diagnostics(
+                    nnp.asarray(data), sampled, self.pupilAngle, 4,
+                )
+                return np.asarray(sampled, dtype=self.dtype)
             data[data!=data] = 0
             if self.pupilAngle != 0.0:
                 data = rotate(data, self.pupilAngle, reshape=False).astype(self.dtype)
@@ -109,7 +132,7 @@ class telescope:
         #----- PUPIL DEFINITION
         if check_path(path_pupil):
             self.verb = True
-            self.pupil = load_and_process_data(path_pupil)
+            self.pupil = load_and_process_data(path_pupil, binary_pupil=True)
         else:
             # build an annular pupil model
             th = self.pupilAngle*nnp.pi/180
