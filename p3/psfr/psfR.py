@@ -83,10 +83,13 @@ class psfR:
         self.tt_covariance_mode = tt_covariance_mode
         self.tt_mirror_model = tt_mirror_model
         self.tt_welch_nperseg = int(tt_welch_nperseg)
-        if ho_covariance_policy not in ('strict', 'small_negative'):
+        if ho_covariance_policy not in ('strict', 'tiny_negative', 'small_negative'):
             raise ValueError("Unknown HO covariance policy: " + str(ho_covariance_policy))
-        if ho_covariance_policy != 'strict' and str(trs.aoMode).upper() != 'NGS':
-            raise ValueError("HO small-negative regularization is exploratory and NGS-only")
+        if ho_covariance_policy == 'small_negative' and str(trs.aoMode).upper() != 'NGS':
+            raise ValueError(
+                "HO small_negative regularization is exploratory and NGS-only; "
+                "use tiny_negative for the tighter LGS/NGS diagnostic policy"
+            )
         self.ho_covariance_policy = ho_covariance_policy
         self.ho_covariance_diagnostics = {}
         self.ao = aoSystem(self.path_ini, path_root=path_root)
