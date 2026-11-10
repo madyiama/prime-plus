@@ -57,7 +57,7 @@ class telescope:
                  path_static_pos=None, path_apodizer=None, path_statModes=None,
                  extraErrorNm=0.0, extraErrorExp=-2, extraErrorMin=0.0, extraErrorMax=0.0,
                  extraErrorLoNm=0.0, extraErrorLoExp=-2, extraErrorLoMin=0.0, extraErrorLoMax=0.0,
-                 precision='double', verbose=True, pupil_resampling='legacy'):
+                 precision='double', verbose=True, pupil_resampling='legacy', pupil_parity='native'):
 
         # PARSING INPUTS
         self.D = D # primary mirror diameter in meters
@@ -68,6 +68,11 @@ class telescope:
         self.pupilAngle = pupilAngle
         if pupil_resampling not in ('legacy', 'physical_binary'):
             raise ValueError("PupilResampling must be legacy or physical_binary")
+        if pupil_parity not in ('native', 'flip_x', 'flip_y'):
+            raise ValueError("PupilParity must be native, flip_x, or flip_y")
+        if pupil_resampling == 'legacy' and pupil_parity != 'native':
+            raise ValueError("Non-native pupil parity requires physical_binary sampling")
+        self.pupil_parity = pupil_parity
         self.pupil_resampling = pupil_resampling
         self.pupil_resampling_diagnostics = {
             'method': 'legacy_spline_rotation' if pupil_resampling == 'legacy'
@@ -116,10 +121,13 @@ class telescope:
                 )
                 sampled = resample_binary_pupil(
                     nnp.asarray(data), int(resolution), float(self.pupilAngle),
-                    supersample=4,
+                    supersample=4, parity=self.pupil_parity,
                 )
                 self.pupil_resampling_diagnostics = pupil_sampling_diagnostics(
                     nnp.asarray(data), sampled, self.pupilAngle, 4,
+                )
+                self.pupil_resampling_diagnostics['input_array_parity'] = (
+                    self.pupil_parity
                 )
                 return np.asarray(sampled, dtype=self.dtype)
             data[data!=data] = 0
