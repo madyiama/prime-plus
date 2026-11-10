@@ -849,6 +849,15 @@ def main():
     print("Error breakdown:")
     for key, value in model.wfe.items():
         print("  ", key, value)
+    # Save the decomposition, not just stdout: critical for 1-vs-7
+    # comparisons where a similar PSF can hide an anisoplanatism change.
+    error_budget = {
+        str(name): float(np.asarray(value).reshape(-1)[0])
+        for name, value in model.wfe.items()
+    }
+    (args.output / "error_breakdown_diagnostics.json").write_text(
+        json.dumps(error_budget, indent=2), encoding="utf-8"
+    )
 
     tt = getattr(model, "tiptilt_diagnostics", {})
     print("Tip-tilt covariance diagnostics:")
@@ -877,6 +886,7 @@ def main():
         "ao_mode": str(trs.aoMode),
         "atmosphere_reconstruction_audit": atmosphere_audit,
         "forward_parameters_diagnostics": forward_audit,
+        "error_breakdown_diagnostics": error_budget,
         "pupil_orientation_diagnostics": pupil_diagnostics,
         "massdimm_diagnostics": massdimm_diagnostics,
         "tt_kernel_convention": model.tt_kernel_convention,
