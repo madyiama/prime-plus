@@ -130,3 +130,18 @@ def test_missing_multilayer_ho_tt_gains_raise_clear_error():
     model = psfR.__new__(psfR)
     with pytest.raises(ValueError, match="two finite HO/TT gains"):
         model.phase_structure_function(0.3654, [], Cn2=np.ones(7))
+
+
+def test_smoke_rejects_local_noncanonical_tt_conversion_before_long_reconstruction():
+    from unittest.mock import patch
+
+    from scripts.keck_n0013_smoke import _validate_canonical_tt_geometry
+
+    _validate_canonical_tt_geometry(10.5)
+    invalid = np.eye(2) * (1.0/10.5)**2
+    with patch(
+        "p3.aoSystem.tipTiltGeometry.opd_covariance_to_angular",
+        return_value=invalid,
+    ):
+        with pytest.raises(ValueError, match="Noncanonical TT"):
+            _validate_canonical_tt_geometry(10.5)
