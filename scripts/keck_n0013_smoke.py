@@ -89,6 +89,41 @@ def _plot_comparison(observed, psf_cube, destination, *, dataset_label="Keck/NIR
     plt.close(fig)
 
 
+def _telemetry_forward_parameters(model, gho=1.0, gtt=1.0):
+    """Build PSF-R's on-axis forward vector for 1 or multiple turbulence layers.
+
+    FourierUtils.sort_params_from_labels expects [r0, gho, gtt] for a
+    single-layer model, but [w_1*r0**(-5/3), ..., w_n*r0**(-5/3),
+    gho, gtt] for a multi-layer model with multiple reconstructed layers.
+    Each w_i is the dimensionless turbulence-integral fraction (sum=1),
+    and the first n entries have units m**(-5/3), NOT Cn2 in m**(-2/3).
+    The r0 used here is the model-atmosphere r0 at model.ao.atm.wvl,
+    already rescaled from the original 500-nm estimate if required.
+    This is a forward evaluation, not an r0/Cn2 fit to the observed PSF.
+    """
+    atm = model.ao.atm
+    r0 = float(atm.r0)
+    if not np.isfinite(r0) or r0 <= 0:
+        raise ValueError(f"PSF-R requires a finite positive r0, got {r0!r}")
+    if not np.isfinite(gho) or not np.isfinite(gtt):
+        raise ValueError("PSF-R gains must be finite")
+    n_layer = int(atm.nL)
+    n_rec = int(model.ao.dms.nRecLayers)
+    if n_layer > 1 and n_rec > 1:
+        weights = np.asarray(atm.weights, dtype=float).reshape(-1)
+        if (weights.size != n_layer or not np.all(np.isfinite(weights))
+                or np.any(weights < 0)
+                or not np.isclose(weights.sum(), 1.0, atol=1e-6, rtol=0)):
+            raise ValueError(
+                "Multi-layer PSF-R needs one finite nonnegative turbulence "
+                f"weight per layer, normalized to one; nL={n_layer}, "
+                f"weights={weights.tolist()}"
+            )
+        strengths = weights * r0**(-5.0/3.0)
+        return strengths.tolist() + [float(gho), float(gtt)]
+    return [r0, float(gho), float(gtt)]
+
+
 def _tt_sensitivity(model, observed, destination):
     """Diagnostic only: vary the fraction of estimated TT noise subtracted.
 
@@ -103,7 +138,7 @@ def _tt_sensitivity(model, observed, destination):
     noise = np.asarray(model.trs.tipTilt.Cn_tt, dtype=float)
     original_dphi = np.array(model.dphi_tt, copy=True)
     alpha_values = [0.0, 0.75, 0.9, 0.98, 1.0]
-    ref_r0 = float(model.ao.atm.r0)
+    forward_parameters = _telemetry_forward_parameters(model)
     spectra = []
     records = []
 
@@ -113,7 +148,7 @@ def _tt_sensitivity(model, observed, destination):
             covariance = (covariance + covariance.T) / 2
             eigenvalues = np.linalg.eigvalsh(covariance)
             model.dphi_tt = model.jitter_phase_structure_function(Ctt=covariance)
-            cube = np.asarray(model([ref_r0, 1.0, 1.0])).squeeze()
+            cube = np.asarray(model(forward_parameters)).squeeze()
             image = cube.sum(axis=-1) if cube.ndim == 3 else cube
             total = float(np.sum(image))
             if not np.isfinite(total) or total <= 0:
@@ -131,7 +166,7 @@ def _tt_sensitivity(model, observed, destination):
             print(f"[TT sensitivity] alpha={alpha:.2f}, peak={image.max():.5g}, {label}", flush=True)
     finally:
         model.dphi_tt = original_dphi
-        model([ref_r0, 1.0, 1.0])  # Restore original PSF output/state.
+        model(forward_parameters)  # Restore original PSF output/state.
 
     fig, axes = plt.subplots(2, 3, figsize=(12, 8), constrained_layout=True)
     flat = axes.flat
@@ -728,12 +763,51 @@ def main():
     )
     print("[HO covariance]", ho_diagnostics, flush=True)
 
-    # [r0, gho, gtt] keeps P3's default K-band throughput at all three
-    # wavelength bins. Passing [r0, 1, 1, 1, 0, 0, 0, ...] instead assigns
-    # the stellar flux to the first bin only.
-    psf = np.asarray(stage("psfR forward", lambda: model([
-        float(model.ao.atm.r0), 1.0, 1.0,
-    ]))).squeeze()
+    # For nLayer=1 this is [r0, gho, gtt]; for nLayer>1 and a
+    # multi-layer reconstructor it is [weights*r0**(-5/3), gho, gtt].
+    # Deliberately omit stellar fitting parameters in both cases: the
+    # Fourier model supplies default throughput in every spectral bin.
+    forward_parameters = _telemetry_forward_parameters(model)
+    from p3.aoSystem.FourierUtils import sort_params_from_labels
+    forward_profile, recovered_r0, forward_gains, _, _, _ = (
+        sort_params_from_labels(model, forward_parameters)
+    )
+    if not np.isclose(recovered_r0, model.ao.atm.r0, rtol=1e-12):
+        raise ValueError(
+            "Multi-layer forward vector changed the atmospheric r0: "
+            f"model={model.ao.atm.r0}, parsed={recovered_r0}"
+        )
+    if len(forward_gains) != 2 or not np.allclose(forward_gains, [1.0, 1.0]):
+        raise ValueError(
+            "PSF-R forward vector did not preserve both HO and TT gains: "
+            f"{forward_gains}"
+        )
+    forward_audit = {
+        "mode": (
+            "layer_strengths_r0_to_minus_5_over_3"
+            if forward_profile is not None else "single_layer_r0"
+        ),
+        "n_atmospheric_parameters": (
+            len(forward_profile) if forward_profile is not None else 1
+        ),
+        "atmosphere_layers": int(model.ao.atm.nL),
+        "reconstructed_layers": int(model.ao.dms.nRecLayers),
+        "r0_model_m": float(model.ao.atm.r0),
+        "r0_model_wavelength_m": float(model.ao.atm.wvl),
+        "r0_roundtrip_m": float(recovered_r0),
+        "layer_strengths_m_to_minus_5_over_3": (
+            np.asarray(forward_profile, dtype=float).tolist()
+            if forward_profile is not None else None
+        ),
+        "gho_gtt": list(map(float, forward_gains)),
+        "stellar_parameters": "default throughput; no source fitting",
+    }
+    (args.output / "forward_parameters_diagnostics.json").write_text(
+        json.dumps(forward_audit, indent=2), encoding="utf-8"
+    )
+    print("[Forward model parameters]", forward_audit, flush=True)
+    psf = np.asarray(stage("psfR forward",
+                           lambda: model(forward_parameters))).squeeze()
     np.save(args.output / "telemetry_only_psf.npy", psf)
     print("PSF shape:", psf.shape, "min/max:", np.nanmin(psf), np.nanmax(psf))
     print("Error breakdown:")
