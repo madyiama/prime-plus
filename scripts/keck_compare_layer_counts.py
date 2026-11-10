@@ -40,8 +40,7 @@ def _read_run(path):
         budget = meta.get("error_breakdown_diagnostics") or {}
     if not atmosphere:
         raise ValueError(f"No atmosphere provenance in {root}")
-    with np.load(root / "telemetry_only_psf.npy", allow_pickle=False) as cube:
-        pass
+    cube = np.load(root / "telemetry_only_psf.npy", allow_pickle=False)
     return meta, atmosphere, budget, cube
 
 
