@@ -525,6 +525,16 @@ def main():
             float(sd.trs.atm.seeing_dimm)
             if sd.trs.atm.seeing_dimm > 0 else None
         ),
+        "airmass_nirc2": float(sd.trs.tel.airmass),
+        "dimm_seeing_reference_assumption": (
+            "UNKNOWN; zenith-projection below is conditional, "
+            "not an independently verified MKWC calibration"
+        ),
+        "seeing_dimm_los_if_zenith_arcsec": (
+            float(sd.trs.atm.seeing_dimm)
+            * float(sd.trs.tel.airmass)**(3.0/5.0)
+            if sd.trs.atm.seeing_dimm > 0 else None
+        ),
         "seeing_mass_arcsec": (
             float(sd.trs.atm.seeing_mass)
             if sd.trs.atm.seeing_mass > 0 else None
@@ -545,6 +555,14 @@ def main():
             float(sd.trs.atm.r0_tel) / (
                 0.976 * (180*3600/np.pi) * float(sd.trs.atm.wvl)
                 / float(sd.trs.atm.seeing_dimm)
+            )
+            if sd.trs.atm.seeing_dimm > 0 else None
+        ),
+        "r0_tel_over_dimm_los_if_zenith": (
+            float(sd.trs.atm.r0_tel) / (
+                (0.976 * (180*3600/np.pi) * float(sd.trs.atm.wvl)
+                 / float(sd.trs.atm.seeing_dimm))
+                * float(sd.trs.tel.airmass)**(-3.0/5.0)
             )
             if sd.trs.atm.seeing_dimm > 0 else None
         ),
