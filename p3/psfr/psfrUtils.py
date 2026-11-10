@@ -147,12 +147,14 @@ def modes2Otf(Cmm, modes, pupil, n_otf, samp=2, basis='Vii',
         eigenvalues, eigenvectors = np.linalg.eigh(
             0.5*(covariance+covariance.T)
         )
-        # Strict mode rejects material negative covariance eigenvalues.
-        # The explicitly requested, NGS-only exploratory policy permits a
-        # *bounded* nearest-PSD projection for small noise-subtraction errors.
-        # Reject both one large negative eigenvalue and the accumulated mass
-        # from many small negative eigenvalues.
-        if covariance_psd_policy not in ('strict', 'small_negative'):
+        # 'strict' rejects any negative beyond numerical eigensolver tolerance.
+        # 'tiny_negative' is an explicit, tightly bounded option for LGS/NGS
+        # finite-sample HO covariance estimates; it is not machine roundoff.
+        # 'small_negative' retains the prior wider exploratory NGS-only option.
+        # Check both the worst eigenvalue and accumulated negative mass.
+        if covariance_psd_policy not in (
+            'strict', 'tiny_negative', 'small_negative'
+        ):
             raise ValueError("Unknown modal covariance PSD policy")
         tolerance = max(1e-12*float(np.max(np.abs(eigenvalues))), 1e-24)
         negative_values = -eigenvalues[eigenvalues < -tolerance]
@@ -163,11 +165,17 @@ def modes2Otf(Cmm, modes, pupil, n_otf, samp=2, basis='Vii',
             if negative_values.size else 0.0
         )
         negative_trace_fraction = negative_mass / max(positive_mass, 1e-30)
-        # 0.5% is an explicit engineering diagnostic budget, NOT a
-        # statistically justified confidence interval or Keck calibration.
-        projection_limit = 0.005
+        # Explicit engineering limits, NOT statistically validated confidence
+        # intervals. 1e-5 (0.001%) is deliberately much tighter than the
+        # NGS-only 0.005 (0.5%) exploratory policy.
+        projection_limits = {
+            'strict': 0.0,
+            'tiny_negative': 1e-5,
+            'small_negative': 5e-3,
+        }
+        projection_limit = projection_limits[covariance_psd_policy]
         can_regularize = (
-            covariance_psd_policy == 'small_negative'
+            covariance_psd_policy != 'strict'
             and negative_mode_fraction <= projection_limit
             and negative_trace_fraction <= projection_limit
         )
@@ -191,9 +199,11 @@ def modes2Otf(Cmm, modes, pupil, n_otf, samp=2, basis='Vii',
                 f"lambda_min={np.min(eigenvalues):.6e}, "
                 f"lambda_max={np.max(eigenvalues):.6e}, "
                 f"tolerance={tolerance:.6e}, "
+                f"negative_mode_fraction={negative_mode_fraction:.6g}, "
                 f"negative_trace_fraction={negative_trace_fraction:.6g}. "
-                "Review HO noise subtraction; optional exploratory "
-                "NGS-only policy is small_negative (0.5% spectrum budget)."
+                "Review HO noise subtraction; explicit optional policies "
+                "are tiny_negative (0.001% each, LGS/NGS) and "
+                "small_negative (0.5% each, NGS-only)."
             )
         if can_regularize and negative_values.size:
             import warnings
@@ -201,8 +211,9 @@ def modes2Otf(Cmm, modes, pupil, n_otf, samp=2, basis='Vii',
                 "HO covariance estimated from telemetry has small negative "
                 f"eigenvalues: clipped {negative_values.size} modes, "
                 f"negative_trace_fraction={negative_trace_fraction:.4g}, "
-                f"worst_relative_eigenvalue={negative_mode_fraction:.4g}; "
-                "exploratory PSD regularization, NOT instrument validation.",
+                f"worst_relative_eigenvalue={negative_mode_fraction:.4g}, "
+                f"policy={covariance_psd_policy}, cap={projection_limit:.4g}; "
+                "explicit PSD regularization, NOT instrument validation.",
                 RuntimeWarning,
                 stacklevel=2,
             )
