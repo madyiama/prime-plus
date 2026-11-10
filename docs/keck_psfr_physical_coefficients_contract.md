@@ -259,6 +259,81 @@ the one- and seven-layer outputs.
   covariance and spatial SF with a known Cn2 profile.
 - Only then consider P2 physically closed and move to P1 r0 fitting.
 
+### 2.7. P2: pupil weighting and exact L0=infinity test
+
+**Important correction to the audit:** the true NIRC2 pupil does enter
+`OTF_DL` during the optical propagation. For a **stationary** phase SF
+this is all the pupil filtering required:
+
+```
+OTF(rho)=OTF_DL(rho)*exp[-Dphi(rho)/2]
+```
+
+However, the Keck LGS focal-cone phase SF from Flicker (2008) is
+spatially *nonstationary*, depending on the two pupil coordinates
+separately. For an amplitude pupil P(r), the correct expression is
+
+```
+OTF(rho) =
+    int P(r)P(r+rho) exp[-Dphi(r,r+rho)/2] dr /
+    int P(r)^2 dr
+```
+
+`FourierUtils.matrix_to_map` averages the original pairwise covariance
+over **all Cartesian grid pairs** with a fixed separation, without
+the actual NIRC2 pupil mask. The subsequent `OTF_DL` multiplication
+correctly introduces the total number of illuminated pairs at each
+separation, but cannot reconstruct their individual nonstationary
+covariances or in general interchange `<exp(-D/2)>` with
+`exp(-<D>/2)`. This is an existing **stationarisation
+approximation**, not proof of a defect large enough to explain the
+Hardy difference. No modification to `matrix_to_map` or the forward
+pupil is applied in the current P2 diagnostic stage.
+
+### Controlled L0 sweep (without touching the science PSF)
+`scripts/keck_l0_cone_sweep.py` loads the completed Keck smoke run's
+`anisoplanatism_diagnostics.json`,
+`frequency_grid_diagnostics.json`,
+`diffraction_otf.npy`, and the generated `.ini` to determine the
+actual 1-D DM actuator grid; it fixes the science on-axis r0, projected
+MASS-DIMM heights, LGS altitude and the NIRC2 OTF. It calls the
+*same native* `focal_angular_function` used by the reconstruction, for
+L0=31.04569, 100, 300, 1000m and exact Kolmogorov infinity, computing
+the linear pupil-weighted SF moment and the nonlinear Strehl-equivalent
+variance separately. Hardy's Kolmogorov analytical reference is shown
+unchanged across L0.
+
+Unlike simply using L0=10^8m, `focal_angular_function` implements an
+analytically stable L0=infinity branch using the small-argument
+McDonald-function expansion:
+
+```
+Ialpha(z) = 3/5 - a*z^(5/3) + O(z^2)
+a = -Gamma(-5/6)/(2^(8/3)*Gamma(11/6))
+```
+
+The six corresponding terms in Flicker's covariance are evaluated as
+a direct combination of absolute separations^(5/3), with no
+cancellation of nearly equal large-outer-scale covariance terms.
+The finite-L0 branch remains bitwise unchanged.
+
+First run 1-layer, then 7-layer if the 1-layer result is convincing.
+The test's **baseline L0 numerical result must reproduce the original
+focal SF WFE** from the run's JSON; otherwise the source/layer/pupil
+geometry is not identical and the sweep is not comparable.
+
+Decision rules:
+- If the linear pupil SF variance tends to Hardy at L0=infinity,
+  finite outer scale accounts for the bulk of the discrepancy.
+- If a large difference remains, inspect the exact pupil-pair
+  weighting, finite actuator grid and sampled SF interpolation.
+- Do not change 0.452/0.423, TT gains or science WFS r0 to force
+  the analytic and numerical WFE to match.
+- Even in the infinite-L0 case, exact agreement is not mandated:
+  Hardy assumes an analytical ideal pupil and this implementation
+  uses the segmented/masked Keck pupil and a finite square actuator
+  grid in its nonstationary stationarisation.
+
 ## 3. Keck II NIRC2 pupil angle
 
 KAON 1160 (Ragland, 2017), equations (1) and (2):
