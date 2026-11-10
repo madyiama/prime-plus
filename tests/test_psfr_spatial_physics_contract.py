@@ -250,3 +250,63 @@ def test_modal_covariance_projection_rejects_many_tiny_negative_modes():
             n_otf=16, samp=2,
             covariance_psd_policy="small_negative",
         )
+
+
+def test_modal_covariance_tiny_negative_policy_accepts_micro_negative_modes():
+    """n0120-scale sample: 0.00023% worst and 0.000026% total."""
+    import pytest
+
+    y, x = np.mgrid[-1:1:8j, -1:1:8j]
+    modes = np.column_stack((x.ravel(), y.ravel()))
+    cov = np.diag([6.087224, -1.391007e-5])
+    with pytest.raises(ValueError, match="positive-semidefinite"):
+        modes2Otf(cov, modes, np.ones((8, 8)), n_otf=16, samp=2)
+
+    audit = {}
+    with pytest.warns(RuntimeWarning, match="explicit PSD regularization"):
+        otf, sf = modes2Otf(
+            cov, modes, np.ones((8, 8)), n_otf=16, samp=2,
+            covariance_psd_policy="tiny_negative",
+            covariance_diagnostics=audit,
+        )
+    assert audit["policy"] == "tiny_negative"
+    assert audit["projection_applied"] is True
+    assert audit["negative_mode_fraction_of_lambda_max"] == pytest.approx(
+        1.391007e-5 / 6.087224
+    )
+    assert audit["maximum_allowed_fraction"] == pytest.approx(1e-5)
+    assert audit["model_validated_by_projection"] is False
+    assert np.all(np.isfinite(otf))
+    assert np.all(np.isfinite(sf))
+
+
+def test_modal_covariance_tiny_negative_policy_rejects_ngs_scale_negative():
+    import pytest
+
+    y, x = np.mgrid[-1:1:8j, -1:1:8j]
+    modes = np.column_stack((x.ravel(), y.ravel()))
+    # 0.743% exceeds the 0.001% LGS/NGS tiny-negative policy.
+    cov = np.diag([0.7308082, -5.429533e-3])
+    with pytest.raises(ValueError, match="negative_mode_fraction"):
+        modes2Otf(
+            cov, modes, np.ones((8, 8)), n_otf=16, samp=2,
+            covariance_psd_policy="tiny_negative",
+        )
+
+
+def test_modal_covariance_tiny_negative_policy_rejects_accumulated_negative_mass():
+    import pytest
+
+    y, x = np.mgrid[-1:1:8j, -1:1:8j]
+    modes = np.column_stack([
+        x.ravel(), y.ravel(), (x*y).ravel(),
+        (x*x-y*y).ravel(), (x*x+y*y).ravel(),
+    ])
+    # Each negative eigenvalue is only 0.0004% of the maximum, but the
+    # sum of four reaches 0.0016% of the positive trace.
+    cov = np.diag([1.0, -4e-6, -4e-6, -4e-6, -4e-6])
+    with pytest.raises(ValueError, match="negative_trace_fraction"):
+        modes2Otf(
+            cov, modes, np.ones((8, 8)), n_otf=16, samp=2,
+            covariance_psd_policy="tiny_negative",
+        )
