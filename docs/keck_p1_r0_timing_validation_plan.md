@@ -46,6 +46,94 @@ Site DIMM reference definition is UNKNOWN; do not choose the version
 closer to WFS r0 and call it validated. A 1-layer and 7-layer result of
 the same Keck image is not a pair of independent measurements.
 
+## Revised observational constraints and n0120 P1-B findings (2026-11-10)
+
+### Atmospheric layers do not independently enter the current r0 fit
+
+\`systemDiagnosis\` reconstructs a single integrated LGS WFS
+pseudo-open-loop phase and fits two parameters \`r0,L0\` to modal
+variances. The \`nLayer=1\` and \`nLayer=7\` smoke configurations
+for n0120 consume **the same telemetry and joint r0/L0 fit**; their
+reported equality is expected and does not count as multi-observation
+validation. The distribution of integrated \`C_n²(h)\` into atmospheric
+layers is used later for anisoplanatism but not to decompose the
+WFS-derived r0 into altitude bins.
+
+### What DIMM measures versus what LGS WFS sees
+
+DIMM usually measures site atmosphere through its independent
+instrumental line of sight, **without the full inside-dome and
+telescope-local optical turbulence seen by the on-telescope WFS**.
+Under an ideal matched sightline/time, independent Kolmogorov
+turbulence adds in \`r0^(-5/3)\`:
+
+\`r0_AO^(-5/3)=r0_external_LOS^(-5/3)+r0_dome^(-5/3)\`.
+
+Then \`r0_AO <= r0_external_LOS\` (equality possible with negligible
+dome turbulence). In practice DIMM and WFS differ in sightline,
+altitude, timing, calibration, outer-scale and finite-sample
+sensitivity. **Do not enforce equality or infer a dome r0 from one
+measurement.** Instead check physically plausible values and
+positive correlation across MANY independent, near-simultaneous
+acquisitions with consistent wavelength/zenith/airmass reductions;
+report offset/scatter and weather/dome covariates. For n0120,
+r0_WFS/r0_DIMM is 0.844 assuming DIMM direct, 1.014 under a
+hypothetical DIMM-zenith-to-LOS conversion; the DIMM reference is
+unverified. This cannot determine whether dome seeing is present.
+
+### Empirical n0120 noise/mode finding: strongest evidence is shape mismatch
+
+P1-B output from user \`p1_modal_noise_audit.json\`:
+- 27,111 pseudo-OL frames, **261** Noll 4–264 HO modes (radial
+  orders 2–22), 349 valid actuators, Zernike Gram condition **2.14**.
+- Default legacy DM-command lag-noise proxy explains only **0.08313%**
+  of summed measured modal variance; **zero** negative corrected
+  modes. The 0/0.5/1/1.5 multiplier fixed-L0 r0 range is
+  **0.1147156–0.1147528m**, merely 0.032% across the full interval.
+  This says the *current subtracted proxy* has negligible impact,
+  **NOT** that true WFS detector noise has been calibrated or is small.
+- The existing model fits the first radial orders very closely, but
+  observed/model modal variance ratios climb systematically:
+  order 5 **1.239**, order 10 **1.415**, order 15 **1.509**,
+  order 20 **1.569**, order 21 **1.679**, order 22 **1.632**.
+- The advertised \`rms_radial_fit_relative_residual=2.82%\`
+  is an **L2 residual normalized over raw variances**, heavily
+  dominated by the low orders. It is *not* a representative
+  relative error for high radial orders.
+- The full-range nonlinear fit minimized absolute variance errors
+  (no equal-relative weighting). It can favor correct low-order
+  normalization even when higher orders are 30–70% off.
+- The Keck DM has approximately 21 actuators across; order 22
+  likely approaches or exceeds reliably representable DM spatial
+  structure. This is an **instrumental review flag**, not by itself
+  evidence of aliasing. Verify DM influence-function modal response,
+  mode orthogonality on a valid annular pupil, noise attenuation,
+  WFS aliasing and the fitted order range before discarding modes
+  or changing the theoretical r0/L0 covariance.
+
+Read-only **P1-C** script created to quantify this discrepancy from
+the existing JSON alone:
+
+\`\`\`bash
+uv run python scripts/keck_p1_radial_fit_robustness.py \
+  --input "$PWD/results/n0120_P1_modal_noise/p1_modal_noise_audit.json" \
+  --output "$PWD/results/n0120_P1_radial_robustness"
+\`\`\`
+
+The script infers r0 with fitted L0 **held fixed**, using absolute
+and logarithmic loss functions on selected radial-order ranges.
+This is a model-consistency diagnostic, NOT a calibrated independent
+r0 fit or a new estimate with formal uncertainties. It separately
+reports raw/corrected/theory ratios and noise fractions for every
+order. Outputs JSON/2 CSV/PNG.
+
+**P1 next physical priority**: reproduce Jolissaint et al. (2018)
+with a DM-adapted annular fitting pupil and a theory subjected to
+the same modal response, then test calibrated spectral WFS noise
+and spatial aliasing. Independently verify the RTC pseudo-open-loop
+sign and latency. Avoid forcing agreement with a dome-independent
+DIMM monitor.
+
 ### P1-B: direct modal/noise subtraction audit (current branch)
 
 The present \`systemDiagnosis\` workflow **does not directly fit the
