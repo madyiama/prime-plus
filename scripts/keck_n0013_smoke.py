@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 from pathlib import Path
 import time
 import tomllib
@@ -313,6 +314,29 @@ def _ho_covariance_preflight(trs):
         "scientific_status": (
             "Diagnostic of finite-sample covariance subtraction, not an "
             "independent validation of the WFS noise estimator"
+        ),
+    }
+
+
+def _git_code_revision():
+    """Record the exact model source state, including uncommitted edits."""
+    root = Path(__file__).resolve().parents[1]
+
+    def git(*argv):
+        try:
+            return subprocess.run(
+                ["git", *argv], cwd=root, capture_output=True, text=True,
+                check=False, timeout=5,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+
+    rev = git("rev-parse", "HEAD")
+    dirty = git("diff", "--quiet", "--", "p3", "scripts")
+    return {
+        "git_revision": rev.stdout.strip() if rev and rev.returncode == 0 else None,
+        "tracked_physics_code_has_uncommitted_edits": (
+            dirty.returncode == 1 if dirty is not None else None
         ),
     }
 
@@ -717,6 +741,7 @@ def main():
     (args.output / "metadata.json").write_text(json.dumps({
         "input_fits": str(args.fits.resolve()),
         "input_sav": str(args.sav.resolve()),
+        "code_revision": _git_code_revision(),
         "filter_profile_diagnostics": filter_profile_diagnostics,
         "addNCPA": False,
         "ao_mode": str(trs.aoMode),
