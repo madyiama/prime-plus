@@ -23,6 +23,7 @@ from __future__ import annotations
 from typing import Literal
 import numpy as np
 from scipy import signal
+from scipy.integrate import trapezoid
 from scipy.special import gamma, kv
 from scipy.signal import fftconvolve
 
@@ -204,7 +205,7 @@ def spectral_command_noise_variance(modal_commands, fs, freq_tf, transfer,
         raise ValueError("Too little valid high-frequency WFS noise PSD")
     whitened = pxx[hf, :] / psd_tf[hf, None]
     plateau = np.median(whitened, axis=0)
-    noise = plateau * np.trapezoid(psd_tf, f)
+    noise = plateau * trapezoid(psd_tf, f)
     return np.maximum(noise, 0), {
         "high_band_fraction_nyquist": list(high_band),
         "welch_nperseg": int(min(2048, len(command))),
