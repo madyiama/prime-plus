@@ -57,7 +57,7 @@ class DIMM(object):
         self.hour[idx] -= 24
 
 
-        self.r0 = 0.98 * 500e-7 * 206265.0 / self.seeing # in cm
+        self.r0 = 0.976 * 500e-7 * 206265.0 / self.seeing # in cm
 
         self.timeInHours = self.hour + (self.minute/60.0) + (self.second/3600.0)
 
@@ -72,9 +72,12 @@ class DIMM(object):
             timeDiff = abs(self.timeInHours - item)
             closestIndex = timeDiff.argmin()
 
-            ## Make sure we aren't off by more than an hour
-            if timeDiff[closestIndex] > 1.0 and self.verbose:
-                print('Could not find MASS data close to ', item)
+            # Reject stale measurements independently of verbosity.
+            # Previously this condition incorrectly depended on self.verbose,
+            # so default non-verbose runs could silently accept >1-hour data.
+            if timeDiff[closestIndex] > 1.0:
+                if self.verbose:
+                    print('No MASS/DIMM measurement within one hour of ', item)
                 closestVal = -1.
             else:
                 closestVal = self.seeing[closestIndex]
@@ -141,9 +144,12 @@ class MASS(object):
             timeDiff = abs(self.timeInHours - item)
             closestIndex = timeDiff.argmin()
 
-            ## Make sure we aren't off by more than an hour
-            if timeDiff[closestIndex] > 1.0 and self.verbose:
-                print('Could not find MASS data close to ', item)
+            # Reject stale measurements independently of verbosity.
+            # Previously this condition incorrectly depended on self.verbose,
+            # so default non-verbose runs could silently accept >1-hour data.
+            if timeDiff[closestIndex] > 1.0:
+                if self.verbose:
+                    print('No MASS/DIMM measurement within one hour of ', item)
                 closestVal = -1.
             else:
                 closestVal = self.free_seeing[closestIndex]
@@ -213,9 +219,12 @@ class MASSPROF(object):
             timeDiff = abs(self.timeInHours - item)
             closestIndex = timeDiff.argmin()
 
-            ## Make sure we aren't off by more than an hour
-            if timeDiff[closestIndex] > 1.0 and self.verbose:
-                print('Could not find MASS data close to ', item)
+            # Reject stale measurements independently of verbosity.
+            # Previously this condition incorrectly depended on self.verbose,
+            # so default non-verbose runs could silently accept >1-hour data.
+            if timeDiff[closestIndex] > 1.0:
+                if self.verbose:
+                    print('No MASS/DIMM measurement within one hour of ', item)
                 closestVal = -1.
             else:
                 closestVal = self.profs[closestIndex]
@@ -415,14 +424,28 @@ def get_mass_dimm_for_image(fits_file, massdimm_dir):
     return
 
 
-def CombineMASSandDIMM(seeing,seeingAlt,Cn2Alt,wvl=500e-9):
-    """
-    """
-    radian2arcsec = 3600 * 180/np.pi
-    seeing0       = (seeing**(5/3) - seeingAlt**(5/3))**(3/5)#/airmass^(3/5)
-    mu0           = (0.976*radian2arcsec)**(5/3)*0.423*4*np.pi*np.pi/wvl**(1/3)
-    Cn2Ground     = seeing0**(5/3)/mu0
+def CombineMASSandDIMM(seeing, seeingAlt, Cn2Alt, wvl=500e-9):
+    """Merge seeing integrals into 7 positive Cn2 dh layers at wavelength wvl.
 
-    Cn2 = [Cn2Ground] +  list(Cn2Alt)
-
-    return np.array(Cn2)
+    DIMM total seeing must be >= MASS free-atmosphere seeing for a
+    nonnegative ground contribution. Fail explicitly if this cannot be
+    resolved instead of raising a negative quantity to a fractional power.
+    """
+    seeing, seeingAlt, wvl = float(seeing), float(seeingAlt), float(wvl)
+    upper = np.asarray(Cn2Alt, dtype=float)
+    if not (np.isfinite(seeing) and np.isfinite(seeingAlt)
+            and np.isfinite(wvl) and seeing > 0 and seeingAlt > 0
+            and wvl > 0 and upper.ndim == 1
+            and upper.size == 6 and np.all(np.isfinite(upper))
+            and np.all(upper >= 0)):
+        raise ValueError("MASS-DIMM requires six nonnegative integrated Cn2 layers and positive seeing")
+    if seeingAlt > seeing:
+        raise ValueError(
+            f"MASS free-atmosphere seeing ({seeingAlt:g} arcsec) exceeds "
+            f"DIMM total seeing ({seeing:g} arcsec); ground Cn2 would be negative"
+        )
+    radian2arcsec = 3600 * 180 / np.pi
+    ground_seeing_power = seeing**(5/3) - seeingAlt**(5/3)
+    mu0 = (0.976*radian2arcsec)**(5/3) * 0.423 * (2*np.pi)**2 / wvl**(1/3)
+    ground_cn2_integral = ground_seeing_power / mu0
+    return np.concatenate(([ground_cn2_integral], upper))
