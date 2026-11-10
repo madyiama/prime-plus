@@ -401,9 +401,26 @@ class aoSystem():
             L0 = 25
 
         if self.check_config_key('atmosphere','Cn2Weights'):
-            weights = self.get_config_value('atmosphere','Cn2Weights')
-            if np.abs(np.sum(weights) - 1) > 1e-3:
+            raw_weights = self.get_config_value('atmosphere','Cn2Weights')
+            try:
+                weights = np.asarray(raw_weights, dtype=float)
+            except (ValueError, TypeError) as exc:
+                raise ValueError(
+                    "Invalid 'Cn2Weights' in [atmosphere]: expected a list "
+                    "of finite numbers, e.g. [0.5, 0.3, 0.2]. An old "
+                    "NumPy array string may be missing commas; regenerate "
+                    "the INI with configFile.py."
+                ) from exc
+            if (weights.ndim != 1 or weights.size == 0
+                    or not np.all(np.isfinite(weights))
+                    or np.any(weights < 0)):
+                raise ValueError(
+                    "'Cn2Weights' in [atmosphere] must be a finite, "
+                    "nonnegative 1-D vector"
+                )
+            if np.abs(float(np.sum(weights)) - 1) > 1e-3:
                 raise ValueError("Sum of 'Cn2Weights' in section 'atmosphere' is not equal to 1")
+            weights = weights.tolist()
         else:
             weights = [1.0]
 
