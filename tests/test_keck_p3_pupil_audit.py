@@ -37,14 +37,23 @@ def test_unknown_and_unavailable_incirc_masks_cannot_fallback_to_open(tmp_path):
         read_mask(tmp_path, incircle)
 
 
-def test_mask_rotation_is_binary_and_changes_off_axis_feature():
+def test_mask_rotation_is_bounded_area_average_and_changes_feature():
     mask = np.zeros((64, 64))
     mask[8:13, 43:51] = 1
     zero = binary_pupil_on_grid(mask, 64, 0)
     turned = binary_pupil_on_grid(mask, 64, 90)
-    assert set(np.unique(turned)).issubset({False, True})
-    assert zero.sum() == turned.sum()
+    assert turned.min() >= 0 and turned.max() <= 1
+    assert turned.sum() == pytest.approx(zero.sum())
     assert not np.array_equal(zero, turned)
+
+
+def test_oblique_rotation_anti_aliases_and_never_overshoots():
+    yy, xx = np.indices((96, 96))
+    open_aperture = ((xx-47.5)**2+(yy-47.5)**2 < 37**2)
+    pupil = binary_pupil_on_grid(open_aperture.astype(float), 96, 46.76723)
+    assert np.any((pupil > 0) & (pupil < 1))
+    assert pupil.min() >= 0 and pupil.max() <= 1
+    assert np.mean(pupil) == pytest.approx(np.mean(open_aperture), abs=0.006)
 
 
 def test_diffraction_energy_and_symmetry_without_atmospheric_fit():
