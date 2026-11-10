@@ -706,6 +706,34 @@ def main():
         tt_kernel_convention=args.tt_kernel_convention,
     ))
 
+    # The WFS fit is already a line-of-sight r0. Its chromatic rescaling
+    # must not have another airmass factor hidden in the INI parser.
+    expected_los_r0 = float(sd.trs.atm.r0_tel) * (
+        float(model.ao.atm.wvl) / float(sd.trs.atm.wvl)
+    )**(6.0/5.0)
+    actual_los_r0 = float(model.ao.atm.r0)
+    if not np.isclose(actual_los_r0, expected_los_r0, rtol=2e-7, atol=1e-12):
+        raise ValueError(
+            "Keck model atmospheric r0 does not match WFS line-of-sight "
+            "r0 after lambda^(6/5) scaling: "
+            f"actual={actual_los_r0:g}m, expected={expected_los_r0:g}m, "
+            f"ratio={actual_los_r0/expected_los_r0:g}. "
+            "Inspect SeeingReference in the generated INI and the "
+            "aoSystem airmass conversion. No science PSF was fitted."
+        )
+    atmosphere_audit.update({
+        "input_seeing_reference": model.ao.atmosphere_seeing_reference,
+        "model_los_r0_m": actual_los_r0,
+        "model_los_r0_expected_from_wfs_m": expected_los_r0,
+        "r0_model_over_expected": actual_los_r0 / expected_los_r0,
+        "airmass_correction_applied_to_wfs_r0": False,
+    })
+    (args.output / "atmosphere_reconstruction_audit.json").write_text(
+        json.dumps(atmosphere_audit, indent=2), encoding="utf-8"
+    )
+    print("[Atmosphere r0 LOS] passed:", actual_los_r0, "m at",
+          model.ao.atm.wvl, "m", flush=True)
+
     # Reference-wavelength / Fourier-grid / angular-centroid audit.
     # The physical image-motion covariance must be independent of lambda;
     # only the OTF sampling and diffraction kernel depend on wavelength.
@@ -735,6 +763,9 @@ def main():
         "input_atmosphere_wavelength_m": float(sd.trs.atm.wvl),
         "rescaled_atmosphere_wavelength_m": float(model.ao.atm.wvl),
         "rescaled_r0_m": float(model.ao.atm.r0),
+        "r0_expected_wfs_los_m": expected_los_r0,
+        "r0_model_over_expected": actual_los_r0/expected_los_r0,
+        "seeing_reference": model.ao.atmosphere_seeing_reference,
         "telescope_diameter_m": diameter,
         "otf_grid_size": int(model.freq.nOtf),
         "camera_pixels": int(model.ao.cam.fovInPix),
@@ -849,6 +880,77 @@ def main():
     print("Error breakdown:")
     for key, value in model.wfe.items():
         print("  ", key, value)
+    # Separate the analytical Kolmogorov cone WFE from the OTF-based
+    # Maréchal-equivalent WFE. They are NOT the same observable.
+    anisoplanatism_audit = {
+        "reference": (
+            "Hardy (1998) Eq. 16 / PRIME (2019) Eq. 12: "
+            "0.5*(h/H)^(5/3)-0.452*(h/H)^2, normalized by 0.423"
+        ),
+        "comparison_note": (
+            "Analytical piston-removed full Kolmogorov cone variance and "
+            "diffraction-weighted OTF equivalent WFE are distinct; "
+            "finite L0 and DM filtering are not in the Hardy formula"
+        ),
+        "reference_wavelength_m": float(model.freq.wvlRef),
+        "atmosphere_r0_m": float(model.ao.atm.r0),
+        "atmosphere_layers": int(model.ao.atm.nL),
+        "layer_weights": list(map(float, model.ao.atm.weights)),
+        "layer_heights_los_m": list(map(float, model.ao.atm.heights)),
+        "lgs_height_los_m": (
+            float(np.asarray(model.ao.lgs.height).reshape(-1)[0])
+            if model.ao.lgs is not None else None
+        ),
+        "otf_equivalent_total_anisoplanatism_wfe_nm": float(
+            model.wfe.get("TOTAL ANISOPLANATISM", 0)
+        ),
+        "otf_equivalent_focal_anisoplanatism_wfe_nm": float(
+            model.wfe.get("FOCAL ANISOPLANATISM", 0)
+        ),
+    }
+    if model.ao.lgs is not None and model.freq.isAniso:
+        from p3.aoSystem.anisoplanatismModel import (
+            focal_anisoplanatism_phase_variance,
+            focal_anisoplanatism_wfe,
+        )
+        anisoplanatism_audit.update({
+            "hardy_cone_phase_variance_rad2": float(
+                focal_anisoplanatism_phase_variance(
+                    model.ao.tel, model.ao.atm, model.ao.lgs
+                )
+            ),
+            "hardy_cone_wfe_nm": float(
+                focal_anisoplanatism_wfe(
+                    model.ao.tel, model.ao.atm, model.ao.lgs
+                )
+            ),
+        })
+        dani = np.asarray(model.dani, dtype=float)
+        if dani.ndim == 3:
+            dani = dani[:, :, 0]
+        otf_dl = np.asarray(model.freq.otfDL, dtype=float)
+        anisoplanatism_only_strehl = (
+            np.sum(otf_dl * np.exp(-0.5*dani)) / np.sum(otf_dl)
+        )
+        anisoplanatism_audit.update({
+            "anisoplanatism_dphi_min_rad2": float(np.min(dani)),
+            "anisoplanatism_dphi_max_rad2": float(np.max(dani)),
+            "anisoplanatism_dphi_center_rad2": float(
+                dani[dani.shape[0]//2, dani.shape[1]//2]
+            ),
+            "otf_only_anisoplanatism_strehl_factor": float(
+                anisoplanatism_only_strehl
+            ),
+            "otf_only_total_wfe_nm": float(
+                np.sqrt(-np.log(anisoplanatism_only_strehl))
+                * model.freq.wvlRef * 1e9/(2*np.pi)
+            ),
+        })
+    (args.output / "anisoplanatism_diagnostics.json").write_text(
+        json.dumps(anisoplanatism_audit, indent=2), encoding="utf-8"
+    )
+    print("[Focal anisoplanatism P2]", anisoplanatism_audit, flush=True)
+
     # Save the decomposition, not just stdout: critical for 1-vs-7
     # comparisons where a similar PSF can hide an anisoplanatism change.
     error_budget = {
@@ -887,6 +989,7 @@ def main():
         "atmosphere_reconstruction_audit": atmosphere_audit,
         "forward_parameters_diagnostics": forward_audit,
         "error_breakdown_diagnostics": error_budget,
+        "anisoplanatism_diagnostics": anisoplanatism_audit,
         "pupil_orientation_diagnostics": pupil_diagnostics,
         "massdimm_diagnostics": massdimm_diagnostics,
         "tt_kernel_convention": model.tt_kernel_convention,
