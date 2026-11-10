@@ -60,6 +60,41 @@ def _phase_sf(rho, r0, outer_scale):
     return np.maximum(out, 0)
 
 
+def dm_influence_for_resolution(trs, spatial_resolution=None):
+    """Read native or REGENERATE finer Keck DM influences, without mutation.
+
+    The off-grid reference is created from exactly the Xinetics
+    influence-function model/pitch/coupling used by telemetryKeck,
+    not by upsampling the already-discretized DM influence matrix.
+    """
+    native = int(trs.tel.resolution)
+    res = native if spatial_resolution is None else int(spatial_resolution)
+    if (res < 51 or res > 301
+            or (res % 2 == 0 and res != native)):
+        raise ValueError(
+            "Jolissaint spatial resolution must be odd in [51,301] "
+            "or the native telemetry resolution"
+        )
+    if res == native:
+        matrix = np.asarray(trs.mat.dmIF, dtype=float)
+        source = "original_telemetry_keck_if"
+    else:
+        from p3.aoSystem.deformableMirror import deformableMirror
+        regenerated_dm = deformableMirror(
+            trs.dm.nActuators, trs.dm.pitch,
+            heights=trs.dm.heights,
+            mechCoupling=trs.dm.mechCoupling,
+            modes=trs.dm.modes,
+        )
+        matrix = np.asarray(
+            regenerated_dm.setInfluenceFunction(res), dtype=float
+        )
+        source = "regenerated_from_keck_dm_calibration"
+    if matrix.shape[0] != res*res or not np.all(np.isfinite(matrix)):
+        raise ValueError("DM influence function array does not match grid")
+    return matrix, res, source
+
+
 def modified_dm_projection(
     influence_matrix, diameter_m, resolution, *,
     annular_outer_m=9.0, annular_inner_m=2.65,
@@ -408,33 +443,9 @@ def estimate_r0(
     if str(trs.aoMode).upper() != "LGS":
         raise ValueError("Jolissaint LGS variant requires Keck LGS telemetry")
 
-    native_n = int(trs.tel.resolution)
-    resolution = native_n if spatial_resolution is None else int(spatial_resolution)
-    if (resolution < 51 or resolution > 301
-            or resolution % 2 != 1 and resolution != native_n):
-        raise ValueError(
-            "Jolissaint spatial resolution must be odd (51..301) "
-            "or equal to the native telemetry resolution"
-        )
-    if resolution == native_n:
-        IF = np.asarray(trs.mat.dmIF, dtype=float)
-        influence_source = "original_telemetry_keck_if"
-    else:
-        # Regenerate the same calibrated Xinetics/Gaussian influence
-        # functions on a finer physical DM grid. NEVER enlarge the
-        # existing 100x100 pixels via image interpolation and call it
-        # convergence of the influence function.
-        from p3.aoSystem.deformableMirror import deformableMirror
-        regenerated_dm = deformableMirror(
-            trs.dm.nActuators, trs.dm.pitch,
-            heights=trs.dm.heights,
-            mechCoupling=trs.dm.mechCoupling,
-            modes=trs.dm.modes,
-        )
-        IF = np.asarray(
-            regenerated_dm.setInfluenceFunction(resolution), dtype=float
-        )
-        influence_source = "regenerated_from_keck_dm_calibration"
+    IF, resolution, influence_source = dm_influence_for_resolution(
+        trs, spatial_resolution=spatial_resolution
+    )
     com = np.asarray(trs.dm.com, dtype=float)
     if IF.ndim != 2 or com.ndim != 2 or IF.shape[1] != com.shape[1]:
         raise ValueError("Keck influence/DM command actuator layout mismatch")
