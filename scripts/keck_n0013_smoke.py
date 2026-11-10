@@ -235,6 +235,15 @@ def main():
         help="Welch segment length for physical TT spectral covariance",
     )
     parser.add_argument(
+        "--ho-covariance-policy", choices=("strict", "small_negative"),
+        default="strict",
+        help=(
+            "HO modal covariance: strict (default) rejects negative eigenvalues; "
+            "small_negative explicitly enables NGS-only, warned PSD projection "
+            "when individual and accumulated negative spectral mass <= 0.5%."
+        ),
+    )
+    parser.add_argument(
         "--disable-tt-jitter", action="store_true",
         help=("Diagnostic ablation only: omit TT jitter from PSF-R OTF, "
               "without changing other components or fitting observations"),
@@ -330,6 +339,9 @@ def main():
     print(f"[TT noise] covariance trace={np.trace(noise_cov):.6e} m²",
           flush=True)
     stage("configFile", lambda: configFile(sd))
+    if args.ho_covariance_policy != "strict" and str(trs.aoMode).upper() != "NGS":
+        parser.error("--ho-covariance-policy small_negative is NGS-only")
+    print(f"[HO covariance] policy={args.ho_covariance_policy}", flush=True)
     if args.disable_tt_jitter:
         print("[TT jitter OTF] DISABLED for ablation (not a physical model)",
               flush=True)
@@ -338,6 +350,7 @@ def main():
         tt_covariance_mode=tt_jitter_model,
         tt_mirror_model=tt_mirror_model,
         tt_welch_nperseg=tt_jitter_nperseg,
+        ho_covariance_policy=args.ho_covariance_policy,
     ))
 
     # Reference-wavelength / Fourier-grid / angular-centroid audit.
@@ -427,6 +440,7 @@ def main():
         "positive_semidefinite_within_tolerance":
             bool(np.all(ho_eig >= -ho_tolerance)),
     }
+    ho_diagnostics.update(getattr(model, "ho_covariance_diagnostics", {}))
     (args.output / "ho_covariance_diagnostics.json").write_text(
         json.dumps(ho_diagnostics, indent=2), encoding="utf-8"
     )
@@ -465,6 +479,12 @@ def main():
         "input_sav": str(args.sav.resolve()),
         "addNCPA": False,
         "ao_mode": str(trs.aoMode),
+        "ho_covariance_policy": args.ho_covariance_policy,
+        "ho_covariance_projection_applied": bool(
+            getattr(model, "ho_covariance_diagnostics", {}).get(
+                "projection_applied", False
+            )
+        ),
         "tt_noise_method_requested": tt_method,
         "tt_noise_method": effective_tt_noise_method,
         "tt_jitter_model_requested": args.tt_jitter_model or jitter_config.get(
