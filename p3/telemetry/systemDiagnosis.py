@@ -55,6 +55,28 @@ def _positive_fft_frequency_grid(sample_rate_hz, n_samples):
     return np.fft.rfftfreq(n_samples, d=1.0 / sample_rate_hz)[1:]
 
 
+def autocorrelation_noise_covariance(samples, nshift=1, *, periodic=False):
+    """Difference-based lag noise proxy, with explicit record boundaries.
+
+    For white sample noise, E[0.5*(y[t+n]-y[t])^2] = C_n.
+    This proxy is NOT an independent calibrated sensor-noise estimate
+    in a closed-loop command stream: correlated motion also contributes.
+
+    periodic=True reproduces historical np.roll, which introduces a
+    nonphysical final-to-first sample jump in finite Keck telemetry.
+    """
+    values = np.asarray(samples, dtype=float)
+    if values.ndim != 2 or not np.isfinite(values).all():
+        raise ValueError("Autocorrelation noise data must be finite 2-D samples")
+    if not isinstance(nshift, (int, np.integer)) or not 0 < nshift < len(values):
+        raise ValueError("Autocorrelation lag must be between 1 and N-1")
+    if periodic:
+        delta = values - np.roll(values, -nshift, axis=0)
+    else:
+        delta = values[nshift:] - values[:-nshift]
+    return 0.5 * (delta.T @ delta) / len(delta)
+
+
 class systemDiagnosis:
 
     def __init__(self, trs, noiseMethod='autocorrelation', nshift=1, nfit=2,
@@ -250,9 +272,14 @@ class systemDiagnosis:
                     Cnn[i,i] = mx - yfit[0]
 
             if noiseMethod=='autocorrelation':
-                du_n  = u - np.roll(u,-nshift,axis=0)
-                du_p  = u - np.roll(u,nshift,axis=0)
-                Cnn   = 0.5*(np.matmul(u.T,du_n + du_p))/nF
+                # In an NGS finite telemetry record there is no physical
+                # final-to-first RTC sample transition. Historical np.roll
+                # inserted an endpoint-jump noise contribution which can
+                # produce negative eigenvalues after HO subtraction.
+                # Keep LGS periodic behavior for previous n0013 comparison.
+                Cnn = autocorrelation_noise_covariance(
+                    u, nshift=nshift, periodic=self.trs.aoMode != 'NGS'
+                )
 
             return Cnn
 
@@ -314,9 +341,19 @@ class systemDiagnosis:
                     self.trs.tipTilt.slopes, noiseMethod=noiseMethod,
                     nshift=nshift, nfit=nfit, rtf=rtf
                 )
-                self.trs.tipTilt.noise_estimation_method = noiseMethod
+                self.trs.tipTilt.noise_estimation_method = (
+                    'autocorrelation_nonperiodic'
+                    if noiseMethod == 'autocorrelation' else noiseMethod
+                )
                 self.trs.tipTilt.noise_estimation_diagnostics = {
-                    'method': noiseMethod, 'noise_model_validated': False
+                    'method': self.trs.tipTilt.noise_estimation_method,
+                    'original_method': noiseMethod,
+                    'finite_record_no_wrap': noiseMethod == 'autocorrelation',
+                    'noise_model_validated': False,
+                    'warning': (
+                        'NGS noise estimated from lag differences, not an '
+                        'independent calibrated sensor-noise measurement'
+                    ),
                 }
 
 
