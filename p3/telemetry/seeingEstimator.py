@@ -241,10 +241,9 @@ def _fit_amplitude(observed, models, noll, radial, diameter, L0_grid):
     other = sorted(v["log_variance_shape_cost"] for v in records)
     delta = (other[1]-other[0]) if len(other)>1 else 0
     return best, records, {
-        "L0_identifiable_from_this_run": bool(
-            len(other)>1 and delta > 0.05*max(other[0], 1e-5)
-            and winner not in (0, len(records)-1)
-        ),
+        "L0_identifiability": "not_independently_validated",
+        "L0_best_on_grid_boundary": bool(winner in (0, len(records)-1)),
+        "next_best_shape_cost_difference": float(delta),
         "model_selection_warning": (
             "L0 is inferred without LGS tip-tilt and may be weakly "
             "identifiable. Grid fit is not a confidence interval."
@@ -260,7 +259,7 @@ def estimate_r0(
     mode_selection: Literal["idl_2018", "all"] = "idl_2018",
     noise: Literal["spectral", "none"] = "spectral",
     alias_correction: bool = False,
-    L0_grid=(10, 15, 22, 31, 45, 65, 100, 150, 250),
+    L0_grid=(10, 15, 22, 31, 45, 65, 100, 150, 250, np.inf),
     j_start=7, j_stop=171,
 ):
     """Estimate atmospheric r0 and L0 using ONE selectable API.
@@ -346,8 +345,11 @@ def estimate_r0(
             -0.00018233364176012401, 1.9037601227012146e-5,
             -2.7620673576089771e-7,
         ])
-        alias_multiplier = np.polynomial.polynomial.polyval(radial, pp)
-        if np.any(alias_multiplier <= 0):
+        alias_multiplier = np.ones(len(j), dtype=float)
+        alias_multiplier[selectable] = np.polynomial.polynomial.polyval(
+            radial[selectable], pp
+        )
+        if np.any(alias_multiplier[selectable] <= 0):
             raise ValueError("Invalid published Keck alias multiplier")
         correct = correct/alias_multiplier
     L0_grid = tuple(float(v) for v in L0_grid)
