@@ -76,3 +76,26 @@ def test_bad_modal_grid_is_rejected():
         independent_modal_budget(_n0120_one_layer(), 12)
     with pytest.raises(ValueError, match="Pupil shape"):
         independent_modal_budget(_n0120_one_layer(), 11, pupil="hex")
+
+
+def test_n0120_seven_layer_piston_and_tilt_removed_converges_to_hardy():
+    g = _n0120_one_layer()
+    g["weights"] = np.array([
+        0.4837829375341058, 2.8954981850976237e-11,
+        7.28398762188621e-11, 4.0265521636513835e-06,
+        0.044337315959307365, 0.4071794322793533,
+        0.06469628757327503,
+    ])
+    g["heights_m"] = np.array([
+        0.0, 679.1794205843375, 1358.358841168675,
+        2716.71768233735, 5433.4353646747,
+        10866.8707293494, 21733.7414586988,
+    ])
+    g["hardy_wfe_nm"] = 295.00749428261554
+    # Coarse independent n=21 circular pupil reproduces Hardy within 1%
+    # despite the >20% difference with piston-only full-cone WFE.
+    report = independent_modal_budget(g, 21)
+    assert report["piston_and_tilt_removed_wfe_nm"] == pytest.approx(
+        295.00749428261554, rel=0.015
+    )
+    assert report["piston_removed_wfe_nm"] > 370
