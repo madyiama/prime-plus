@@ -38,6 +38,7 @@ def test_oblique_rotation_remains_bounded_and_preserves_area():
     assert abs(result.mean() - mask.mean()) < 0.007
     d = pupil_sampling_diagnostics(mask, result, 46.76723, 4)
     assert d["zero_angle_parity_calibrated"] is False
+    assert d["possible_frame_truncation"] is False
     assert d["output_mean_intensity_transmission"] <= d["output_mean_amplitude"]
 
 
@@ -81,3 +82,18 @@ def test_legacy_sampling_is_default_for_generic_telescopes():
     tel = telescope(D=8, resolution=64, obsRatio=0.2, verbose=False)
     assert tel.pupil_resampling == "legacy"
     assert tel.pupil.shape == (64, 64)
+
+
+def test_pupil_mirror_parity_is_explicit_and_axis_specific():
+    source = np.zeros((64, 64))
+    source[5:13, 40:51] = 1
+    np.testing.assert_array_equal(
+        resample_binary_pupil(source, 64, 0, parity="flip_x"),
+        source[:, ::-1],
+    )
+    np.testing.assert_array_equal(
+        resample_binary_pupil(source, 64, 0, parity="flip_y"),
+        source[::-1, :],
+    )
+    with pytest.raises(ValueError, match="parity"):
+        resample_binary_pupil(source, 64, 0, parity="auto")
