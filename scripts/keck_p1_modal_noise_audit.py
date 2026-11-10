@@ -198,11 +198,25 @@ def analyse_diagnosis(sd):
         project_lag_variance(residual, idx, u2z, 1, periodic=False)
     )
     wfs_slope_sample = np.asarray(trs.wfs.slopes, dtype=float)
+    if wfs_slope_sample.ndim != 2:
+        raise ValueError("Raw WFS centroids must have shape (frames,channels)")
+    finite_slope_channels = np.all(np.isfinite(wfs_slope_sample), axis=0)
+    if not np.any(finite_slope_channels):
+        raise ValueError("All raw WFS centroid channels are nonfinite")
     slopes_proxy = lag_difference_variances(
-        wfs_slope_sample, 1, periodic=False
+        wfs_slope_sample[:, finite_slope_channels], 1, periodic=False
     )
     if not np.all(np.isfinite(slopes_proxy)):
         raise ValueError("Nonfinite raw WFS slope difference proxy")
+    # A constant command across actuators is NOT necessarily a pure
+    # wavefront piston after finite DM influence-function projection.
+    # Expose the sensitivity of the HO reconstructor to the uniform
+    # actuator gauge; do not interpret it as a calibrated tilt leak.
+    uniform_actuator_to_ho = u2z @ np.ones(len(idx))
+    uniform_actuator_leak_norm = float(
+        np.linalg.norm(uniform_actuator_to_ho)
+        / max(np.linalg.norm(u2z, ord="fro")*np.sqrt(len(idx)), 1e-30)
+    )
 
     g = np.asarray(sd.mZZ, dtype=float)
     if g.shape != (len(noll), len(noll)):
@@ -232,6 +246,8 @@ def analyse_diagnosis(sd):
         quality_flags.append("TOO_FEW_RADIAL_ORDERS_FOR_R0_L0_DIAGNOSIS")
     if not getattr(trs.dm, "pseudo_ol_sign_independently_verified", False):
         quality_flags.append("PSEUDO_OL_RTC_SIGN_UNVERIFIED")
+    if not np.all(finite_slope_channels):
+        quality_flags.append("NONFINITE_WFS_SLOPE_CHANNELS_EXCLUDED")
     return {
         "physics_scope": (
             "read-only diagnosis of current LGS HO pseudo-OL in actuator "
@@ -292,6 +308,10 @@ def analyse_diagnosis(sd):
             "nominal_tip_tilt_excluded": True,
             "actual_keck_mask_weighting_in_zernike_projection": False,
             "measured_tilt_to_HO_leakage": "not measured; next P1-C experiment",
+            "uniform_actuator_gauge_to_HO_fraction": uniform_actuator_leak_norm,
+            "uniform_actuator_gauge_to_HO_vector_OPD_per_command_m": (
+                uniform_actuator_to_ho.tolist()
+            ),
         },
         "noise_proxies": {
             "legacy_noise_mode_variance_reproduction_relative_error": (
@@ -312,6 +332,9 @@ def analyse_diagnosis(sd):
                 np.median(slopes_proxy)
             ),
             "raw_centroid_num_channels": int(wfs_slope_sample.shape[1]),
+            "raw_centroid_nonfinite_channels_excluded": int(
+                np.count_nonzero(~finite_slope_channels)
+            ),
             "no_calibrated_sensor_noise_available": True,
         },
         "noise_scale_sensitivity": fixed_l0_noise_sensitivity(
