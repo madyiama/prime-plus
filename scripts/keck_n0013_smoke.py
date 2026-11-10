@@ -522,6 +522,13 @@ def main():
               "or subpixel area-averaged physically bounded Keck binary mask."),
     )
     parser.add_argument(
+        "--p3-pupil-parity", choices=("native", "flip_x", "flip_y"),
+        default="native",
+        help=("FITS pupil array parity hypothesis. Non-native parity requires "
+              "--p3-pupil-resampling physical_binary; verify against science "
+              "diffraction, never by blind PSF fitting."),
+    )
+    parser.add_argument(
         "--p3-pupil-rotation",
         choices=("header", "as_archived", "reverse_sign", "plus_90", "minus_90"),
         default="header",
@@ -628,6 +635,8 @@ def main():
         ),
     )
     args = parser.parse_args()
+    if args.p3_pupil_parity != "native" and args.p3_pupil_resampling != "physical_binary":
+        parser.error("--p3-pupil-parity flip_x/flip_y requires physical_binary")
     if args.r0_method != "zernike" and not args.p1_only:
         parser.error("--r0-method jolissaint/both requires --p1-only")
     with args.config.open("rb") as conf_file:
@@ -693,9 +702,11 @@ def main():
     }
     trs.tel.pupilAngle = float(p3_angles[args.p3_pupil_rotation])
     trs.tel.pupil_resampling = args.p3_pupil_resampling
+    trs.tel.pupil_parity = args.p3_pupil_parity
     pupil_diagnostics["p3_rotation_hypothesis"] = args.p3_pupil_rotation
     pupil_diagnostics["p3_array_rotation_applied_deg"] = float(trs.tel.pupilAngle)
     pupil_diagnostics["p3_pupil_sampling"] = args.p3_pupil_resampling
+    pupil_diagnostics["p3_input_array_parity"] = args.p3_pupil_parity
     pupil_diagnostics["p3_rotation_zero_calibrated"] = False
     pupil_diagnostics["p3_rotation_tt_axes_coupled"] = True
     trs.tel.pupil_orientation = pupil_diagnostics
@@ -1348,6 +1359,7 @@ def main():
         "anisoplanatism_diagnostics": anisoplanatism_audit,
         "pupil_orientation_diagnostics": pupil_diagnostics,
         "p3_pupil_resampling": args.p3_pupil_resampling,
+        "p3_pupil_parity": args.p3_pupil_parity,
         "p3_pupil_rotation_hypothesis": args.p3_pupil_rotation,
         "p3_array_rotation_applied_deg": float(trs.tel.pupilAngle),
         "p3_model_pupil_diagnostics": p3_model_pupil,
