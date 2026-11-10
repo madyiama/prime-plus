@@ -220,8 +220,11 @@ class telemetryKeck:
 
             # wavelengths and transmission
             self.path_filter = self.path_calib + '/NIRC2_FILTERS/'
-            self.cam.wvl, self.cam.bw, self.cam.transmission, self.cam.dispersion =\
-            keckUtils.samplingFilterProfile(self.path_filter, hdr)
+            (self.cam.wvl, self.cam.bw, self.cam.transmission,
+             self.cam.dispersion, self.cam.filter_profile_diagnostics) = \
+                keckUtils.samplingFilterProfile(
+                    self.path_filter, hdr, return_metadata=True
+                )
 
             # exposure configuration
             self.cam.ittime,self.cam.coadds,self.cam.sampmode,self.cam.nreads,self.cam.ron,self.cam.gain =\
