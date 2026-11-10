@@ -46,6 +46,103 @@ Site DIMM reference definition is UNKNOWN; do not choose the version
 closer to WFS r0 and call it validated. A 1-layer and 7-layer result of
 the same Keck image is not a pair of independent measurements.
 
+### P1-B: direct modal/noise subtraction audit (current branch)
+
+The present \`systemDiagnosis\` workflow **does not directly fit the
+\`OFFSETCENTROID\` WFS slopes**. It fits DM actuator-space
+pseudo-open-loop \`DMCOMMAND + shifted RESIDUALWAVEFRONT\` after
+\`u2z = pinv(Z^T Z) Z^T IF_DM\`. The default Noll lower bound is
+\`j0=4\`, excluding tip-tilt nominally. That does NOT prove zero
+tip-tilt leakage through a finite-resolution, non-orthogonal DM basis.
+
+Major unresolved issue: \`slopes_to_noise(self.trs.dm.com)\`
+estimates a lag-one **closed-loop DM command difference covariance**,
+with *periodic* end-to-start wrapping for LGS, then
+\`var_noise_zer=diag(u2z C_DM,lag1 u2z^T)\` is subtracted from the
+measured pseudo-open-loop Zernike variance. The command differences
+have true atmospheric and closed-loop temporal contributions and are
+not, by themselves, a physically independent WFS noise measurement.
+This may bias both r0 and L0. The helper also demeans the input DM
+commands IN PLACE. Current r0 fit sets \`noise=1\` by default,
+subtracting the entire lag covariance proxy, and uses the **median**
+of corrected modal variances for each radial order.
+
+This P1-B opt-in audit does NOT change production noise, reconstructor
+or timestamps. From live \`systemDiagnosis\` it saves:
+- measured, lag-proxy and corrected Zernike variances, by Noll mode
+  and by radial order, plus theoretical fitted variance and residuals;
+- fraction of the signal attributed to the lag proxy and any
+  nonpositive corrected modal variance;
+- equality test between the original LGS periodic actuator lag
+  estimator and its reconstruction in modal space;
+- *non-calibrated* comparison of periodic DM, finite-window DM and
+  finite-window residual lag-1 variance proxies; raw WFS centroid
+  differences labelled in pixel² (never added to OPD² without
+  reconstructing the sensor gain);
+- fixed-fitted-L0 r0 variance-amplitude sensitivity under noise
+  multipliers 0, 0.5, 1.0, 1.5 (not a full joint fit);
+- Gram matrix conditioning and the fact that the projection currently
+  uses an ideal circular/annular Zernike basis, not an instrument-adapted
+  DM modal basis.
+
+Run on the SAME \`--sav/--fits/--calib\` paths as an existing smoke:
+\`\`\`bash
+uv run python scripts/keck_n0013_smoke.py \
+  --sav /path/to/n0120_LGS_trs.sav \
+  --fits /path/to/n0120_science.fits \
+  --calib /path/to/keck_calibration \
+  --output results/n0120_P1_modal_noise \
+  --n-layer 7 --p1-only
+\`\`\`
+The paths above are placeholders, **not verified as existing**.
+\`--p1-only\` stops immediately after the atmospheric
+reconstruction diagnostics and does not compute the PSF.
+Outputs \`p1_modal_noise_audit.json\`, three CSVs and a radial
+variance plot. Run tests with
+\`uv run --with pytest python -m pytest -q
+tests/test_keck_p1_modal_noise_audit.py\`.
+
+**Physics-matched reference for next steps:** Jolissaint, Ragland,
+Christou & Wizinowich (2018), *Determination of the optical
+turbulence parameters from the adaptive optics telemetry: critical
+analysis and on-sky validation*, Appl. Opt. 57(27), 7837,
+DOI:10.1364/AO.57.007837. This is a Keck-specific DM-command-based
+seeing method, not a generic WFS tutorial. It explicitly treats
+(a) a **9m/2.56m annular fitting pupil** to exclude DM edge and
+central obscuration artifacts, (b) Zernike modes projected into
+the DM influence-function basis and their **modified turbulence
+covariance**, (c) selecting good radial modes, (d) WFS noise
+inferred from **DM temporal PSD and closed-loop transfer function**
+with attenuation compensation, and (e) WFS aliasing plus its
+correlated terms. Reported DM-derived seeing tracks independent
+simultaneous open-loop PSFs within ~10% but is much less correlated
+with non-collocated MASS/DIMM. Reimplement/test these corrections
+in controlled variants, **not** by tuning the current DIMM ratio.
+
+### Next instrumental/model alternatives
+
+1. **Keck published DM-variance method (preferred baseline)**:
+   matched 9m/2.56m annular pupil and DM-modified Zernike covariance,
+   select calibrated modes, estimate noise through temporal PSD
+   and AO transfer function, correct WFS aliasing.
+2. **Pseudo-open-loop slope covariance**: build slopes from
+   residual centroids + delayed DM interaction model and a correctly
+   calibrated slope-to-wavefront reconstructor; subtract sensor noise
+   in slope covariance, then propagate by the same modal projector.
+   This is a cross-check, not an immediate replacement, because
+   WFS optical gain, lenslet geometry and reconstructed slopes
+   require Keck 2020 calibration.
+3. **Temporal lagged covariance**: estimate turbulence from nonzero
+   frame lags where white noise does not add a zero-lag spike,
+   under explicit assumptions on frozen flow and temporal sampling.
+4. **Fixed-L0 and profile-likelihood r0/L0 fits**: amplitude-only
+   r0 fit at chosen L0, then a joint noise/r0/L0 sensitivity map
+   with actual residual variances by radial order.
+
+The 2018 Keck study and an independent 2003 Keck open-loop study
+indicate that **WFS calibration and modal projection**, rather than
+DIMM agreement, should control claims of absolute r0 accuracy.
+
 ### P1-B: *next* — RTC timing/sign sensitivity on raw Keck telemetry
 
 Build a **read-only** replay of \`u_ol(t)\` for both time sign
