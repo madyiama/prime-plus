@@ -385,7 +385,7 @@ class psfR:
         dphi = angular_jitter_structure_function(
             Ctheta, self.ao.tel.D, self.freq.wvlRef, Ur, Vr
         )
-        return self.tt_kernel_dphi_multiplier_vs_noll * dphi
+        return getattr(self, 'tt_kernel_dphi_multiplier_vs_noll', 1.0) * dphi
 
     def _legacy_tiptilt_covariance(self, noise_raw):
         """Preserve original PR #2 behaviour for reproducible comparisons."""
