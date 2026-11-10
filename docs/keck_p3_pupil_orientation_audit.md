@@ -189,3 +189,28 @@ P3 branch regression tests for this increment:
 `tests/test_keck_p3_pupil_sampling.py`.
 The full project test suite and the on-sky n0120 runs
 have not been executed in this environment.
+
+### P3 image parity and array truncation controls
+
+Keck AO Note 1160 explicitly reports opposite rotation senses for
+WFS and NIRC2 and an X-axis reflection attributed to the IR dichroic.
+A pure angle difference is not necessarily enough to transform an
+asymmetric pupil if the stored FITS mask was prepared in the WFS
+reference. The corrected optical mode now permits an explicit
+`--p3-pupil-parity {native,flip_x,flip_y}` hypothesis, with
+`native` as **unverified** default. A non-native parity is prohibited
+in legacy sampling mode and is never chosen from PSF fit residuals.
+
+The diffraction script has the same `--parity` option. Run
+native and flip_x in **different output directories** if the
+symmetric hexagonal layout is ambiguous. A mirror reflection cannot
+generally be identified from an ideal symmetric hexagon: use spiders,
+segment gaps, asymmetric fiducials or independent camera-frame data.
+
+The corrected telescope records
+`relative_occupancy_area_change` and
+`possible_frame_truncation` when the rotated mask loses/gains more
+than 1% of geometric occupancy in its fixed square field. This is
+a warning, not an automatic area renormalization, because the
+meters-per-pixel scale of the archived FITS mask is not independently
+verified. Report any large value before interpreting NIRC2 Strehl.
