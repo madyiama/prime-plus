@@ -79,6 +79,8 @@ def test_multilayer_forward_uses_layer_integrated_turbulence_for_anisoplanatism(
     cn2, parsed_r0, gains, _, _, _ = sort_params_from_labels(model, params)
     ny = nx = 4
     kernel = np.arange(1, 8, dtype=float)
+    yy, xx = np.indices((ny, nx))
+    separations = (yy - ny//2)**2 + (xx - nx//2)**2
     physics = psfR.__new__(psfR)
     physics.ao = model.ao
     physics.freq = NS(isAniso=True, wvlRef=1.53e-6)
@@ -86,16 +88,21 @@ def test_multilayer_forward_uses_layer_integrated_turbulence_for_anisoplanatism(
     physics.dphi_tt = np.zeros((ny, nx))
     physics.dphi_fit = np.zeros((ny, nx))
     physics.dphi_alias = np.zeros((ny, nx))
-    physics.dphi_ani = np.broadcast_to(
-        kernel[np.newaxis, :, np.newaxis, np.newaxis],
-        (1, 7, ny, nx),
+    physics.dphi_ani = kernel[np.newaxis, :, np.newaxis, np.newaxis] * (
+        0.1 + separations[np.newaxis, np.newaxis, :, :]
     )
     sf = physics.phase_structure_function(parsed_r0, gains, Cn2=cn2)
     assert sf.shape == (ny, nx, 1)
-    expected = np.dot(
+    expected_scale = np.dot(
         model.ao.atm.weights, kernel
     ) * parsed_r0**(-5.0/3.0)
-    np.testing.assert_allclose(sf, expected*np.ones((ny, nx, 1)))
+    np.testing.assert_allclose(
+        sf[:, :, 0], expected_scale*separations, atol=1e-12, rtol=1e-12
+    )
+    assert sf[ny//2, nx//2, 0] == pytest.approx(0, abs=1e-12)
+    assert physics.dani_raw_zero_lag_rad2[0] == pytest.approx(
+        0.1*expected_scale
+    )
 
 
 def test_multilayer_atmosphere_with_single_reconstructor_expects_r0_not_strengths():
