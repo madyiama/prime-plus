@@ -274,7 +274,11 @@ def _fit_amplitude(observed, models, noll, radial, diameter, L0_grid):
         if np.any(ref <= 0):
             raise ValueError("Theoretical modal variance must be positive")
         delta = logy-np.log(ref)
-        logamp = float(np.median(delta))
+        # This criterion is mean squared log variance, so its exact
+        # best-fit log amplitude is the MEAN of log ratios, not median.
+        # Using median with mean-square cost is inconsistent and can
+        # shift the inferred outer-scale optimum.
+        logamp = float(np.mean(delta))
         cost = float(np.mean((delta-logamp)**2))
         records.append({
             "L0_m": "infinity" if np.isinf(outer) else float(outer),
