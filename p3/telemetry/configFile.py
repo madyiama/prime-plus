@@ -68,6 +68,11 @@ class configFile():
             parser.add_section('atmosphere')
 
         parser.set('atmosphere','Wavelength', str(sysdiag.trs.atm.wvl))
+        # The WFS pseudo-open-loop Zernike fit yields the Fried parameter
+        # along the observed science line of sight; this is NOT a DIMM
+        # zenith seeing. The generic aoSystem defaults to zenith for older
+        # hand-authored INIs, so the Keck telemetry INI must say otherwise.
+        parser.set('atmosphere','SeeingReference', repr('line_of_sight'))
         parser.set('atmosphere','Seeing', str(sysdiag.trs.atm.seeing))
         parser.set('atmosphere','L0', str(sysdiag.trs.atm.L0))
         parser.set('atmosphere','Cn2Weights', _format_numeric_vector(
