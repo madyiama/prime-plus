@@ -496,11 +496,17 @@ def _write_outputs(summary, saved, output):
     fig.tight_layout()
     fig.savefig(output/"masked_cone_otf_audit.png", dpi=150)
     plt.close(fig)
-    # Native arrays are deliberately saved per grid/L0, not as a single
-    # "corrected PSF-R" file, to avoid confusing the scientific scope.
-    for label, bundle in saved.items():
-        for key, data in bundle.items():
-            np.save(output/f"{label}_{key}.npy", data)
+    # main() already flattens the products into a dict of named arrays:
+    #   {"n15_L0inf_piston_removed_otf": ndarray, ...}
+    # Do not iterate over each ndarray as if it were a nested dict.
+    # Native arrays are kept per grid/L0 rather than one science PSF.
+    for label, data in saved.items():
+        if not isinstance(data, np.ndarray):
+            raise TypeError(
+                f"Expected NumPy array for saved product {label!r}, "
+                f"got {type(data).__name__}"
+            )
+        np.save(output / f"{label}.npy", data)
 
 
 def main():
