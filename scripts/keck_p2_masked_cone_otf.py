@@ -43,11 +43,16 @@ import csv
 from configparser import ConfigParser
 import json
 from pathlib import Path
-from types import SimpleNamespace as NS
+import sys
 
 import numpy as np
 from scipy.ndimage import map_coordinates
 from scipy.special import gamma, kv
+
+# Allow direct "uv run python scripts/..." on macOS, not only module imports.
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from scripts.keck_l0_cone_sweep import load_geometry
 from scripts.keck_p2_cone_modal_reference import independent_modal_budget
