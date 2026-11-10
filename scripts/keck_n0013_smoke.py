@@ -578,7 +578,35 @@ def main():
             "Production atmospheric estimator remains unchanged."
         ),
     )
+    parser.add_argument(
+        "--r0-method", choices=("zernike", "jolissaint", "both"),
+        default="zernike",
+        help=(
+            "P1-only unified seeing estimator: production Zernike, "
+            "experimental Jolissaint modified DM modal basis, or both. "
+            "Production PSF-R always retains the legacy estimator."
+        ),
+    )
+    parser.add_argument(
+        "--jolissaint-noise", choices=("spectral", "none"),
+        default="spectral",
+        help="Experimental HF PSD/closed-loop noise correction, or no subtraction"
+    )
+    parser.add_argument(
+        "--jolissaint-modes", choices=("idl_2018", "all"),
+        default="idl_2018",
+        help="Published Keck 2018 LGS exclusions or all valid Noll 7..120"
+    )
+    parser.add_argument(
+        "--jolissaint-alias", action="store_true",
+        help=(
+            "Apply the published Keck 2018 empirical WFS alias polynomial; "
+            "NOT independently calibrated for n0120"
+        ),
+    )
     args = parser.parse_args()
+    if args.r0_method != "zernike" and not args.p1_only:
+        parser.error("--r0-method jolissaint/both requires --p1-only")
     with args.config.open("rb") as conf_file:
         full_config = tomllib.load(conf_file)
     noise_config = full_config.get("tip_tilt_noise", {})
@@ -777,9 +805,33 @@ def main():
             lambda: analyse_diagnosis(sd)
         )
         write_audit(audit, args.output)
+        from p3.telemetry.seeingEstimator import estimate_r0
+        methods = (
+            ("zernike", "jolissaint") if args.r0_method == "both"
+            else (args.r0_method,)
+        )
+        seeing = {}
+        for name in methods:
+            seeing[name] = stage(
+                f"P1 r0 estimator [{name}]",
+                lambda m=name: estimate_r0(
+                    sd, method=m,
+                    noise=args.jolissaint_noise,
+                    mode_selection=args.jolissaint_modes,
+                    alias_correction=args.jolissaint_alias,
+                ),
+            )
+            print(
+                f"[P1 r0 {name}] r0={seeing[name]['r0_m']:.6g}m, "
+                f"L0={seeing[name]['L0_m']:.6g}m",
+                flush=True,
+            )
+        (args.output / "p1_r0_estimator_comparison.json").write_text(
+            json.dumps(seeing, indent=2), encoding="utf-8"
+        )
         print(
             "[P1-only] Complete; no PSF reconstruction, no fitting of "
-            "science image, no changes to r0/L0 estimator. "
+            "science image, no changes to production r0/L0 estimator. "
             f"flags={audit['quality_flags']}",
             flush=True,
         )
