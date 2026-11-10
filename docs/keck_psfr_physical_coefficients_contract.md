@@ -35,6 +35,25 @@ subtracted WFS noise. `r0_tel` then replaces the initial DIMM seeing in the
 forward AO model. Therefore DIMM is an **external comparison**, not the
 final r0 used in current PSF-R.
 
+### 2.1. DIMM zenith and science line-of-sight
+
+For an atmosphere represented by a plane-parallel optical turbulence column,
+at science airmass `X=sec(z)`,
+`r0_los = r0_zenith * X^(-3/5)`, and
+`seeing_los = seeing_zenith * X^(3/5)`.
+
+Comparing raw site-monitor DIMM seeing to AO r0 along a science line-of-sight
+can therefore introduce a substantial systematic difference. At n0120,
+`EL=47.40723 deg`, `X≈1.358`, and a zenith-normalized `0.74 arcsec` DIMM
+would predict `0.889 arcsec` on the science line-of-sight, near the previous
+`0.906 arcsec` AO fit.
+
+**This comparison is conditional:** the exact MKWC per-record reduction
+convention (zenith-normalized or raw) is not certified by the archived
+`.dimm.dat` fields. The smoke writes both direct and conditional
+airmass-adjusted ratios, with the assumption in metadata. Do not replace
+the independent site seeing by the conditional estimate without provenance.
+
 ## 3. Keck II NIRC2 pupil angle
 
 KAON 1160 (Ragland, 2017), equations (1) and (2):
