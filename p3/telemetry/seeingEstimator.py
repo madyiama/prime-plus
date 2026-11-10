@@ -261,7 +261,7 @@ def estimate_r0(
     noise: Literal["spectral", "none"] = "spectral",
     alias_correction: bool = False,
     L0_grid=(10, 15, 22, 31, 45, 65, 100, 150, 250),
-    j_start=7, j_stop=120,
+    j_start=7, j_stop=171,
 ):
     """Estimate atmospheric r0 and L0 using ONE selectable API.
 
@@ -326,7 +326,11 @@ def estimate_r0(
     correct = measured-noise_var
     j = calib["noll"]
     radial = calib["radial_order"]
-    selectable = (j >= 7)&(j <= 120)&(correct > 0)
+    # The IDL constructs all 165 modified modes Noll 7..171,
+    # then retains the calibrated subset within Noll 7..120.
+    # The omitted 121..171 modes still participate in the Gram
+    # inversion and thus in the definition of the low-order modes.
+    selectable = (j >= 7)&(j <= min(j_stop, 120))&(correct > 0)
     if mode_selection == "idl_2018":
         selectable &= ~np.isin(j, list(_IDL_LGS_BAD))
     elif mode_selection != "all":
@@ -334,7 +338,8 @@ def estimate_r0(
     if np.count_nonzero(selectable) < 12:
         raise ValueError("Too few usable modified Zernike LGS modes")
     if alias_correction:
-        if j.max() > 120 or j.min() < 7:
+        if (np.max(j[selectable]) > 120
+                or np.min(j[selectable]) < 7):
             raise ValueError("IDL alias fit is only validated in Noll 7..120")
         pp = np.array([
             0.99893514401310313, 0.00077066823200766521,
