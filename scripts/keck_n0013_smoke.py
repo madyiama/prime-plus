@@ -938,6 +938,20 @@ def main():
             "anisoplanatism_dphi_center_rad2": float(
                 dani[dani.shape[0]//2, dani.shape[1]//2]
             ),
+            "anisoplanatism_dphi_center_before_normalization_rad2": float(
+                np.asarray(model.dani_raw_zero_lag_rad2).reshape(-1)[0]
+            ),
+            "otf_dc_multiplier_before_normalization": float(
+                np.exp(-0.5 *
+                       np.asarray(model.dani_raw_zero_lag_rad2).reshape(-1)[0])
+            ),
+            "zero_lag_normalization": model.dani_zero_lag_reference,
+            "zero_lag_physical_note": (
+                "A phase structure function must vanish at zero OTF "
+                "separation. Subtracting its interpolated DC offset "
+                "preserves the flux-normalized PSF while removing a "
+                "spurious Strehl/WFE scale factor."
+            ),
             "otf_only_anisoplanatism_strehl_factor": float(
                 anisoplanatism_only_strehl
             ),
