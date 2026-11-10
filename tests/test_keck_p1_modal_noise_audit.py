@@ -138,3 +138,20 @@ def test_noise_over_subtraction_is_flagged_not_silently_clipped():
     d = analyse_diagnosis(sd)
     assert "NEGATIVE_OR_ZERO_NOISE_SUBTRACTED_MODE" in d["quality_flags"]
     assert d["modes"][0]["variance_corrected_OPD_m2"] < 0
+
+
+def test_invalid_wfs_centroid_channels_are_reported_not_silently_used():
+    sd = _fake_system_diagnosis()
+    sd.trs.wfs.slopes[0, 0] = np.nan
+    d = analyse_diagnosis(sd)
+    assert d["noise_proxies"]["raw_centroid_nonfinite_channels_excluded"] == 1
+    assert "NONFINITE_WFS_SLOPE_CHANNELS_EXCLUDED" in d["quality_flags"]
+
+
+def test_piston_like_uniform_actuator_gauge_is_reported_separately_from_tilt():
+    sd = _fake_system_diagnosis()
+    d = analyse_diagnosis(sd)
+    p = d["projection"]
+    assert p["uniform_actuator_gauge_to_HO_fraction"] > 0
+    assert len(p["uniform_actuator_gauge_to_HO_vector_OPD_per_command_m"]) == 4
+    assert p["measured_tilt_to_HO_leakage"].startswith("not measured")
