@@ -44,9 +44,13 @@ exponentials; Jensen gives \`OTF_exact >= OTF_stationarized\` for
 nonnegative amplitude pair weights and a Gaussian phase model.
 Retain explicit nonstationary accumulation for future P2 integration;
 the user confirms the additional computational expense is acceptable.
-Anisoplanatic PSF formulations in Beltramo-Martin et al. (2018),
-*PSF reconstruction from AO telemetry, atmospheric anisoplanatism*,
-distinguish pupil-averaging from the nonstationary phase structure.
+This is the nonstationary, point-wise anisoplanatism formalism of
+Beltramo-Martin et al. (2018), *Off-axis point spread function
+characterization in laser guide star adaptive optics systems*,
+MNRAS 478, 4642–4656, DOI:10.1093/mnras/sty1103, which is subsequently
+used in the 2019 PRIME reconstruction paper. The residual AO term may
+be stationarized only under a separately justified approximation; the
+anisoplanatic cone covariance explicitly depends on pupil position.
 
 ## 3. Golden Keck n0120 numerical checkpoints
 
