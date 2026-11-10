@@ -95,7 +95,7 @@ def read_mask(calibration_directory, report):
     return path, data
 
 
-def binary_pupil_on_grid(data, resolution, rotation_deg):
+def binary_pupil_on_grid(data, resolution, rotation_deg, parity='native'):
     """Use exactly the bounded, area-averaged sampling of the P3 telescope.
 
     Name kept for compatibility with the first P3 diagnostic script.
@@ -105,6 +105,7 @@ def binary_pupil_on_grid(data, resolution, rotation_deg):
     from p3.aoSystem.pupilTransforms import resample_binary_pupil
     return resample_binary_pupil(
         data, resolution, rotation_deg=rotation_deg, supersample=4,
+        parity=parity,
     )
 
 
