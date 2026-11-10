@@ -152,6 +152,8 @@ def compare(one, seven, *, allow_mismatch=False):
 
     sha_1 = (meta_1.get("code_revision") or {}).get("git_revision")
     sha_7 = (meta_7.get("code_revision") or {}).get("git_revision")
+    if not err_1 or not err_7:
+        flags.append("INCOMPLETE_WFE_ERROR_BUDGET")
     if sha_1 != sha_7:
         flags.append("DIFFERENT_CODE_REVISIONS")
         warnings.warn(
