@@ -4,12 +4,14 @@ All tests are synthetic, CPU-only and independent of Keck FITS/SAV.
 No production P3 source code is exercised or changed by the prototype.
 """
 
-from types import SimpleNamespace as NS
+import json
+from pathlib import Path
 
 import numpy as np
 import pytest
 
 from scripts.keck_p2_masked_cone_otf import (
+    load_case_geometry,
     _sample_pupil,
     _cone_covariance,
     _project_modes,
@@ -170,3 +172,58 @@ def test_modal_tilt_basis_preserves_weighted_orthogonality():
     ])
     v = Cp@(w[:, None]*modes)
     assert np.max(np.abs(v)) < 1e-9
+
+
+def test_completed_p2_case_loader_transfers_hardy_reference_to_prototype(tmp_path):
+    """Regression for the real n0120 CLI KeyError: 'hardy_wfe_nm'."""
+    case = tmp_path / "n0120_P2_1layers"
+    case.mkdir()
+    # This fixture uses the actual output FILE SCHEMA, not the synthetic
+    # hand-built geometry dict used by the other unit tests.
+    aniso = {
+        "reference_wavelength_m": 1.530e-6,
+        "atmosphere_r0_m": 0.43911888960217066,
+        "atmosphere_layers": 1,
+        "layer_weights": [1.0],
+        "layer_heights_los_m": [8208.713037464015],
+        "lgs_height_los_m": 122252.29570518076,
+        "hardy_cone_wfe_nm": 312.41730593493025,
+        "focal_model_conditions": {
+            "von_karman_outer_scale_m": 31.045692184830187,
+        },
+    }
+    grid = {
+        "telescope_diameter_m": 10.5,
+        "otf_sampling_sampRef": 3.0231069111135773,
+    }
+    (case/"anisoplanatism_diagnostics.json").write_text(
+        json.dumps(aniso), encoding="utf-8"
+    )
+    (case/"frequency_grid_diagnostics.json").write_text(
+        json.dumps(grid), encoding="utf-8"
+    )
+    (case/"Keck_NIRC2.ini").write_text(
+        "[DM]\nNumberActuators = [1]\n", encoding="utf-8"
+    )
+    np.save(case/"diffraction_otf.npy", np.ones((8, 8)))
+
+    g = load_case_geometry(case)
+    assert g["hardy_wfe_nm"] == pytest.approx(312.41730593493025)
+    assert g["weights"].tolist() == [1.0]
+    assert g["n_actu"] == 1
+
+    # Exercise the exact first computation reached by the user CLI,
+    # including Hardy metric formatting, not just a key presence check.
+    sampled = _sample_pupil(g["diameter_m"], 15, "circle")
+    report, _ = evaluate_configuration(g, sampled, np.inf)
+    assert report["piston_and_tilt_removed"]["hardy_reference_wfe_nm"] == pytest.approx(
+        312.41730593493025
+    )
+    assert report["piston_and_tilt_removed"]["pupil_projected_wfe_nm"] > 0
+
+    del aniso["hardy_cone_wfe_nm"]
+    (case/"anisoplanatism_diagnostics.json").write_text(
+        json.dumps(aniso), encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="Missing hardy_cone_wfe_nm"):
+        load_case_geometry(case)
