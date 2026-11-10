@@ -184,6 +184,27 @@ def compare(one, seven, *, allow_mismatch=False):
         "encircled_energy_seven_by_pixel_radius": _encircled_energy(img7),
         "anisoplanatism_one": aniso_1,
         "anisoplanatism_seven": aniso_7,
+        "focal_sf_variance_bridge_one": aniso_1.get(
+            "pupil_sf_bridge_focal_only", {}
+        ),
+        "focal_sf_variance_bridge_seven": aniso_7.get(
+            "pupil_sf_bridge_focal_only", {}
+        ),
+        "focal_sf_bridge_ratios_seven_over_one": {
+            key: (
+                float(aniso_7["pupil_sf_bridge_focal_only"][key])
+                / float(aniso_1["pupil_sf_bridge_focal_only"][key])
+            )
+            for key in (
+                "pupil_piston_removed_phase_variance_rad2",
+                "strehl_equivalent_phase_variance_rad2",
+                "pupil_piston_removed_wfe_nm",
+                "strehl_equivalent_wfe_nm",
+            )
+            if aniso_1.get("pupil_sf_bridge_focal_only")
+            and aniso_7.get("pupil_sf_bridge_focal_only")
+            and float(aniso_1["pupil_sf_bridge_focal_only"][key]) > 0
+        },
         "anisoplanatism_difference_seven_minus_one": {
             k: float(aniso_7[k])-float(aniso_1[k])
             for k in aniso_1.keys() & aniso_7.keys()
