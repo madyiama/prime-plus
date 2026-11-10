@@ -387,6 +387,61 @@ the more expensive true-pupil pair weighting / average-before-exponential
 issue be assessed. The production `focal_angular_function` at finite
 L0 and `matrix_to_map` are unchanged in the current experiment.
 
+### 2.9. P2 controlled spatial-grid experiment (audit-only, NOT forward PSF)
+
+A controlled `scripts/keck_p2_spatial_sampling_audit.py` now compares
+three focal-cone evaluations for the same on-axis r0, MASS-DIMM profile,
+LGS height, actual NIRC2 diffraction OTF and each chosen L0:
+
+1. **Legacy P3**: native Flicker covariance grid
+   `u_i = [D*max(1,samp)/(4*n_ph)]*(i-n_ph//2)`, square unmasked
+   `matrix_to_map` pair average, original index-based cubic
+   `interpolateSupport(map, nOtf)`. Must reproduce the original
+   `pupil_sf_bridge_focal_only` result at the measured L0.
+2. **Physical re-interpolation of legacy**: native covariance unchanged,
+   but the map is sampled at the OTF's *physical* lag axis
+   `rho_k = (k-nOtf//2) D*sampRef/nOtf`. Missing source support
+   is set to zero only where no physical pupil pairs should overlap;
+   the weighted missing fraction is always reported. This branch
+   is generally NOT a valid forward-model replacement: for the
+   n0120 geometry, the original lag range is only +/-7.751m,
+   while illuminated pupil overlaps can extend to ~10.5m.
+3. **Physical pupil grid**: recompute the native covariance on
+   `u_i=linspace(-D/2,+D/2,n_ph)` and physically interpolate its
+   `matrix_to_map` result at each OTF lag. The covariance formula
+   and square unmasked pair average remain the same: this isolates
+   a change in pupil-coordinate and lag-grid calibration from the
+   separate nonstationary averaging issue.
+
+All three methods are swept over e.g. 31, 100, 300, inf metres.
+The exact infinite von Karman outer-scale limit is evaluated
+analytically, not via a numerically unstable very large finite L0.
+
+**Independent stationary geometry control.**
+For a synthetic `Dphi(rho)=|rho|^(5/3)`, sampled on the same
+n0120 grids and weighted by the OTF of an ideal circular pupil:
+- legacy index-based zoom weighted RMS relative error ~0.693;
+- metric resampling of the fully physical grid ~0.000228;
+- legacy source map cannot cover ~5.13% of the ideal-pupil
+  OTF weight when remapped to the true physical lag axis.
+
+These are a *coordinate-grid discriminant*, not direct WFE/PSF
+correction factors: the cone SF is nonstationary, and the segmented
+Keck pupil has its own support. Before changing production
+`focal_angular_function`, verify the actual Keck pupil's
+positive OTF-weight coverage, convergence with n_ph and correct
+zero-lag behavior. The `legacy` baseline difference must be
+<1e-4 relative, the physical stationary-grid control should
+be <5% relative weighted RMS, and missing physically illuminated
+OTF support should be <1% for a meaningful WFE comparison.
+
+The output `p2_spatial_sampling_audit.json`, CSV and PNG document
+all branches, Hardy comparisons, L0 sensitivity and quality flags.
+No science-image fitting, TT normalization or coefficients are changed.
+Production `focal_angular_function` remains on its historical
+grid by default; new `pupil_grid_mode`/`output_grid` kwargs are
+explicitly audit-only.
+
 ## 3. Keck II NIRC2 pupil angle
 
 KAON 1160 (Ragland, 2017), equations (1) and (2):
