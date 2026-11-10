@@ -241,7 +241,7 @@ def samplingFilterProfile(path_filter, hdr, nWvl=3, thresold=0.9,
         'filter_name': filter_name,
         'composite_filter': hdr.get('FILTER'),
         'source': None,
-        'calibrated_transmission_curve_available': False,
+        'tabulated_transmission_curve_available': False,
         'flat_transmission_approximation': False,
     }
     try:
@@ -344,7 +344,7 @@ def samplingFilterProfile(path_filter, hdr, nWvl=3, thresold=0.9,
     metadata.update({
         'source': 'local_transmission_table',
         'profile_file': str(_find_filter_profile_file(path_filter, filter_name)),
-        'calibrated_transmission_curve_available': True,
+        'tabulated_transmission_curve_available': True,
     })
     result = (wvl_c, bw, tr_c, disp)
     return (*result, metadata) if return_metadata else result
