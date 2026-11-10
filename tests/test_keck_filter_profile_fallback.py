@@ -93,3 +93,42 @@ def test_primary_filter_selection_ignores_blocking_glass_and_clear():
     assert keckUtils.getFilterName(hdr) == "Kp"
     hdr["fwiname"] = "clear"
     assert keckUtils.getFilterName(hdr) == "Kp"
+
+
+def test_existing_nirc2_h_filter_uses_tabulated_profile():
+    from pathlib import Path
+    folder = (
+        Path(__file__).resolve().parents[1]
+        / "p3/aoSystem/data/KECK_CALIBRATION/NIRC2_FILTERS"
+    )
+    hdr = {
+        "CURRINST": "NIRC2",
+        "fwiname": "H",
+        "fwoname": "PK50_1.5",
+        "CENWAVE": 1.633,
+        "MINWAVE": 1.485,
+        "MAXWAVE": 1.781,
+    }
+    wavelengths, bw, throughput, _, info = keckUtils.samplingFilterProfile(
+        str(folder), hdr, return_metadata=True
+    )
+    assert info["source"] == "local_transmission_table"
+    assert not info["flat_transmission_approximation"]
+    assert wavelengths.size == 3
+    assert np.all(np.isfinite(throughput))
+    assert np.all(throughput > 0)
+    assert bw > 0
+
+
+def test_missing_entire_filter_directory_is_not_silent_header_fallback(tmp_path):
+    directory = tmp_path / "missing"
+    with pytest.raises(FileNotFoundError, match="calibration directory"):
+        keckUtils.samplingFilterProfile(str(directory), _n0120_header())
+
+
+def test_inactive_filter_wheels_cannot_fabricate_passband(tmp_path):
+    hdr = _n0120_header()
+    hdr["fwiname"] = "clear"
+    hdr["fwoname"] = "PK50_1.5"
+    with pytest.raises(ValueError, match="No active NIRC2 science passband"):
+        keckUtils.samplingFilterProfile(str(tmp_path), hdr)
