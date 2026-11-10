@@ -309,6 +309,7 @@ def _fit_amplitude(observed, models, noll, radial, diameter, L0_grid):
 def estimate_r0(
     diagnosis, *,
     method: Literal["zernike", "jolissaint"] = "zernike",
+    spatial_resolution=None,
     mode_selection: Literal["idl_2018", "all"] = "idl_2018",
     noise: Literal["spectral", "none"] = "spectral",
     alias_correction: bool = False,
@@ -345,13 +346,39 @@ def estimate_r0(
     if str(trs.aoMode).upper() != "LGS":
         raise ValueError("Jolissaint LGS variant requires Keck LGS telemetry")
 
-    IF = np.asarray(trs.mat.dmIF, dtype=float)
+    native_n = int(trs.tel.resolution)
+    resolution = native_n if spatial_resolution is None else int(spatial_resolution)
+    if (resolution < 51 or resolution > 301
+            or resolution % 2 != 1 and resolution != native_n):
+        raise ValueError(
+            "Jolissaint spatial resolution must be odd (51..301) "
+            "or equal to the native telemetry resolution"
+        )
+    if resolution == native_n:
+        IF = np.asarray(trs.mat.dmIF, dtype=float)
+        influence_source = "original_telemetry_keck_if"
+    else:
+        # Regenerate the same calibrated Xinetics/Gaussian influence
+        # functions on a finer physical DM grid. NEVER enlarge the
+        # existing 100x100 pixels via image interpolation and call it
+        # convergence of the influence function.
+        from p3.aoSystem.deformableMirror import deformableMirror
+        regenerated_dm = deformableMirror(
+            trs.dm.nActuators, trs.dm.pitch,
+            heights=trs.dm.heights,
+            mechCoupling=trs.dm.mechCoupling,
+            modes=trs.dm.modes,
+        )
+        IF = np.asarray(
+            regenerated_dm.setInfluenceFunction(resolution), dtype=float
+        )
+        influence_source = "regenerated_from_keck_dm_calibration"
     com = np.asarray(trs.dm.com, dtype=float)
     if IF.ndim != 2 or com.ndim != 2 or IF.shape[1] != com.shape[1]:
         raise ValueError("Keck influence/DM command actuator layout mismatch")
     diameter = float(trs.tel.D)
     calib = modified_dm_projection(
-        IF, diameter, int(trs.tel.resolution),
+        IF, diameter, resolution,
         j_start=j_start, j_stop=j_stop,
         dm_pitch_m=float(np.asarray(trs.dm.pitch).reshape(-1)[0]),
         valid_actuators=trs.dm.validActuators,
@@ -454,6 +481,8 @@ def estimate_r0(
         "annular_inner_diameter_m": calib["analysis_inner_diameter_m"],
         "actuator_count": int(len(act)),
         "actuator_selection": calib["actuator_selection"],
+        "dm_influence_source": influence_source,
+        "dm_influence_resolution": resolution,
         "dm_influence_extent_m": calib["dm_influence_extent_m"],
         "pupil_sample_pitch_m": calib["pupil_sample_pitch_m"],
         "pixels_per_dm_pitch": calib["pixels_per_dm_pitch"],
