@@ -90,3 +90,24 @@ def test_endpoint_audit_reports_source_of_negative_ho_covariance():
     assert info["covariance_after_subtraction_periodic"]["min_eigenvalue_m2"] < 0
     assert info["closing_jump_covariance_trace_m2"] > 0
     assert info["noise_trace_periodic_m2"] > info["noise_trace_nonperiodic_m2"]
+
+
+def test_preflight_records_lgs_tiny_negative_before_psfr():
+    """The HO failure diagnostic must be available even if PSF-R is rejected."""
+    from scripts.keck_n0013_smoke import _ho_covariance_preflight
+
+    commands = np.array([
+        [0., 0.], [1., 0.], [0., 0.], [1., 0.],
+    ])
+    trs = NS(
+        aoMode="LGS",
+        dm=NS(com=commands),
+        holoop=NS(gain=1.0),
+        wfs=NS(Cn_ao=np.diag([0.0, 2.3e-6])),
+    )
+    result = _ho_covariance_preflight(trs)
+    assert result["lambda_min_m2"] < 0
+    assert result["negative_mode_count"] == 1
+    assert result["tiny_negative_policy_would_pass"] is True
+    assert result["negative_mode_fraction_of_lambda_max"] < 1e-5
+    assert result["negative_trace_fraction_of_positive_mass"] < 1e-5
