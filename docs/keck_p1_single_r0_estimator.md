@@ -115,6 +115,59 @@ with \`--r0-method jolissaint --jolissaint-noise none\`.
 For the old published but **unvalidated-on-n0120** WFS alias model,
 add \`--jolissaint-alias\` separately.
 
+## n0120 first on-sky result and critical geometry correction
+
+**First execution**: legacy \`r0=0.1147404m, L0=31.0457m\`
+at 500nm LOS; Jolissaint prototype \`r0=0.0998327m, L0=15m\`,
+75 selected LGS Noll modes, full 165-mode constructed basis,
+modified Gram condition 65.77, 205 Welch high-frequency bins.
+The selected-mode spectral noise subtracted was **0.07394%**
+of their summed measured variance (median per-mode 0.139%,
+maximum per-mode ~0.39%). It cannot explain the ~13% r0
+difference by itself. The log variance profile cost at L0=15m was
+0.01144 (rms log residual ~10.7%), versus 0.01490 at 22m and
+0.02123 at 31m. This profile has **no validated confidence interval**.
+
+**DO NOT treat the first prototype estimate as a calibrated result**:
+three implementation issues identified after reviewing this output
+and the original IDL and corrected within this same PR:
+
+1. **367 DM channels instead of precisely 320**. The old Python
+   code estimated actuator selection from the spatial peaks of
+   overlapping influence functions, an invalid coordinate proxy.
+   Original \`actuator_to_zernike_matrices.pro\` and
+   \`get_seeing.pro\` define the nominal 21x21 Keck grid and select
+   \`1.2*pitch < r < 10.05*pitch\`, corresponding to **320
+   of the 349 physically valid channels**. Corrected selection
+   uses nominal actuator coordinates and the loaded
+   \`trs.dm.validActuators\` mask; it **rejects** 21x21 cases
+   without exactly 320 selected actuators.
+2. **Wrong spatial sampling of DM influence functions**.
+   \`deformableMirror.setInfluenceFunction(resolution)\` samples
+   a physical **11.25m** grid for the 21x21 DM at 0.5625m pitch,
+   whereas the prototype mistakenly sampled the phase model
+   and annulus on a 10.5m grid. Corrected pupil coordinates
+   span +/-5.625m and the covariance kernel uses physical
+   pixel separation \`11.25/(resolution-1)\` throughout.
+   For resolution=100, the actual sampling is **4.95
+   pixels per DM pitch**; this is **below the IDL paper's
+   recommended >=13 pixels/pitch**, so convergence to the
+   original method remains outstanding.
+3. **Log-amplitude fit criterion inconsistent**: the prototype
+   previously used the median log ratio but minimized the
+   *mean squared* log residual. Corrected to the **mean** log
+   ratio, the analytic optimum for the stated loss.
+
+After these corrections the first n0120 Jolissaint r0/L0 values
+are **obsolete and must be recomputed**. The updated JSON now
+records \`actuator_count\` (expected 320), \`dm_influence_extent_m\`,
+\`pixels_per_dm_pitch\`, selected-mode noise fractions, and
+per-selected-Noll measured/theoretical variance ratios.
+
+No production estimator change, no new PR. Do not compare to DIMM
+as an equality target; seeing from the on-telescope AO path includes
+dome seeing and may differ from external monitors.
+
 ## Validation gates before production substitution
 
 1. Synthetic phase/noise tests, covariance positivity, reference
