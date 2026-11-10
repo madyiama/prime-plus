@@ -36,7 +36,7 @@ def test_n0120_unsupported_filter_uses_labelled_header_passband(tmp_path):
     assert meta["filter_name"] == "CH4_short"
     assert meta["source"] == "fits_header_flat_passband"
     assert meta["flat_transmission_approximation"] is True
-    assert not meta["calibrated_transmission_curve_available"]
+    assert not meta["tabulated_transmission_curve_available"]
 
 
 def test_missing_filter_without_header_bounds_fails_with_useful_error(tmp_path):
@@ -72,7 +72,7 @@ def test_local_table_is_preferred_over_header_proxy(tmp_path):
     )
     assert meta["source"] == "local_transmission_table"
     assert not meta["flat_transmission_approximation"]
-    assert meta["calibrated_transmission_curve_available"]
+    assert meta["tabulated_transmission_curve_available"]
     assert profile_path.name in meta["profile_file"]
     assert wavelengths.size == 3 and bw > 0
     assert np.all(transmission > 0)
