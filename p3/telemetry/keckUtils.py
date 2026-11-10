@@ -128,6 +128,10 @@ def _find_filter_profile_file(path_filter, spectral_filter):
     """Resolve locally tabulated NIRC2 profiles without a hard-coded whitelist."""
     folder = Path(path_filter)
     wanted = ''.join(ch for ch in str(spectral_filter).casefold() if ch.isalnum())
+    # Keck documentation calls the methane filters CH4S/CH4L, whereas
+    # NIRC2 FITS headers use CH4_short / CH4_long.
+    aliases = {'ch4short': 'ch4s', 'ch4long': 'ch4l'}
+    equivalent_names = {wanted, aliases.get(wanted, wanted)}
     if not wanted:
         raise FileNotFoundError("No NIRC2 science-filter name in the FITS header")
     if not folder.is_dir():
@@ -135,7 +139,7 @@ def _find_filter_profile_file(path_filter, spectral_filter):
     available = sorted(folder.glob("*.dat"))
     for candidate in available:
         normalized = ''.join(ch for ch in candidate.stem.casefold() if ch.isalnum())
-        if normalized == wanted:
+        if normalized in equivalent_names:
             return candidate
     names = ', '.join(item.stem for item in available)
     raise FileNotFoundError(
