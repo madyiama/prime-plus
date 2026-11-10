@@ -182,7 +182,12 @@ class telemetryKeck:
         # 2\ Restore the telescope configuration
         self.tel.name  = hdr['TELESCOP'].replace(' ','')
         self.tel.zenith_angle, self.tel.airmass = keckUtils.getTelescopeAirmass(hdr)
-        self.tel.pupilAngle = keckUtils.getPA(hdr)
+        # NIRC2 sky PA must not rotate the physical telescope pupil.
+        # KAON 1160 supplies the NIRC2/WFS angle conventions separately.
+        self.tel.pupil_orientation = keckUtils.getPupilAngles(hdr)
+        self.tel.pupilAngle = self.tel.pupil_orientation['nirc2_pupil_angle_deg']
+        self.tel.skyPositionAngle = self.tel.pupil_orientation['sky_position_angle_deg']
+        self.tel.wfsPupilAngle = self.tel.pupil_orientation['wfs_pupil_angle_deg']
         self.tel.pupilMaskName = keckUtils.getPupilMask(hdr)
         _,self.aoMode = keckUtils.getStagePositionWFS(hdr)
 
