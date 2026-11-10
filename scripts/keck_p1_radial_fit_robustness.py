@@ -91,15 +91,15 @@ def analyse_radial_robustness(
     ratios = obs/model
     noise_pct = 100*(raw-obs)/raw
     per_order = []
-    for n, x, u, y, m, ratio, f in zip(
-        order, raw, noise_pct, obs, model, ratios, noise_pct
+    for n, y, m, ratio, noise_removed_pct in zip(
+        order, obs, model, ratios, noise_pct
     ):
         per_order.append({
             "radial_order": int(n),
             "observed_corrected_rad2": float(y),
             "theory_fit_rad2": float(m),
             "observed_over_theory": float(ratio),
-            "noise_subtracted_fraction_percent": float(f),
+            "noise_subtracted_fraction_percent": float(noise_removed_pct),
             "r0_fixed_L0_single_order_m": float(r0*ratio**(-3/5)),
         })
     subsets = []
