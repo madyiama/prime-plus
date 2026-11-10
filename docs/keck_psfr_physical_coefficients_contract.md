@@ -517,6 +517,60 @@ Reference: Sasiela, *Electromagnetic Wave Propagation in Turbulence*,
 2nd edition (2007), Sec. 6.13 eqs. 6.196-6.197;
 Beltramo-Martin et al., *PRIME*, MNRAS 487, 5450 (2019), Eq. 12.
 
+### 2.11. P2 Step B: direct nonstationary OTF from actual Keck pupil
+
+**Inputs**: the existing per-run Keck INI used by the PSF-R smoke
+script (containing \`[telescope] PathPupil, PupilAngle, Resolution,
+PathApodizer\`) and the matched
+\`anisoplanatism_diagnostics.json\`. This guarantees that the *same
+rotated science-pupil map* is loaded by \`telescope()\`; there is no
+surrogate circular pupil in \`--pupil keck\` mode and no arbitrary
+orientation offset. A \`--pupil circle\` mode is provided as a separate
+analytic reference.
+
+The **audit-only** \`scripts/keck_p2_masked_cone_otf.py\` computes:
+
+1. On a physical pupil grid with spacing D/n, sample the complex
+   amplitude transmission \`A_i\` from the actual science pupil map.
+2. Assemble the LGS cone residual covariance from the four-term
+   phase-structure identity for
+   \`delta_phi(r)=phi(r)-phi((1-h/H)r)\`, independently of
+   \`FourierUtils.matrix_to_map\`. Use
+   \`Dphi(rho)=6.88(|rho|/r0)^(5/3)\` at L0=infinity or an
+   explicitly normalized von Karman McDonald kernel for finite L0.
+3. Apply a **weighted orthogonal covariance projector**, not a WFE
+   scalar subtraction, for either {piston} or {piston,x tilt,y tilt}:
+   \`R=I-F(F^T W F)^(-1)F^T W\`, \`C'=R C R^T\`, with
+   \`W_ii=A_i² / sum(A²)\`.
+4. Compute per-illuminated-pair phase differences
+   \`Dij=C'ii+C'jj-2*C'ij\`. Directly accumulate at each integer
+   physical separation:
+   \`OTF_exact(rho)=sum_pairs[A_i A_j exp(-Dij/2)]/sum(A²)\`.
+   Compare this with the approximation
+   \`OTF_mean(rho)=OTF_DL(rho)exp[-mean_pairs(Dij)/2]\`.
+   Exact pupil weights are \`A_i A_j\` rather than \`A_i²\`;
+   zero-frequency OTF is 1 for both.
+5. Record the focal-only phase RMS, OTF Strehl, differences from the
+   stationarized OTF, and the historical P3 WFE **with modal
+   noncomparability made explicit**. Native low-resolution FFT images
+   are supporting diagnostics, not the full AO science PSF.
+
+**Experimental sequence**: first circle \`--grid-sizes 15,21,31\`
+and \`L0=inf\` to reproduce the Hardy piston+tilt limit; then
+\`--pupil keck\` with the **same** grid/L0 settings and the measured
+outer scale from telemetry. Compare 1 and 7 layers only after the
+one-layer benchmarks pass.
+
+Crucial limitations: discretizing the true segmented pupil at 15 or
+21 pixels cannot resolve all segment gaps/spiders; assess convergence
+up to n=31/43. Finite L0 has no Hardy target because Hardy uses
+Kolmogorov. The true NIRC2 pupil's orientation and mask zero/parity
+remain to be calibrated in P3. The fitted WFS r0, TT covariance and
+P3 HO model are held fixed but are NOT applied to these focal-only
+PSFs. Deciding whether cone tilt belongs in an independent Keck
+STRAP/NGS term requires the RTC/HO modal-split audit and is **not**
+authorized by this prototype alone. No PSF-R production change.
+
 ## 3. Keck II NIRC2 pupil angle
 
 KAON 1160 (Ragland, 2017), equations (1) and (2):
