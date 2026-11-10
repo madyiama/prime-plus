@@ -18,6 +18,7 @@ from p3.telemetry.seeingEstimator import (
     spectral_command_noise_variance,
     dm_influence_for_resolution,
     closed_loop_modal_psd_audit,
+    assess_jolissaint_spatial_convergence,
 )
 
 
@@ -290,3 +291,55 @@ def test_psd_closed_loop_diagnostic_is_not_falsely_an_estimator():
     audit = closed_loop_modal_psd_audit(frame, fs, freq, low_pass)
     assert audit["fraction_command_psd_at_CTF_power_below_half"] > 0.5
     assert audit["command_PSD_weighted_CTF_power"] < 1.0
+
+
+
+def _synthetic_jolissaint_grid_entry(resolution, r0, noll=(9, 10, 12), *,
+                                    L0=10, boundary=True):
+    return {
+        "method": "jolissaint",
+        "dm_influence_resolution": resolution,
+        "r0_m": r0,
+        "L0_m": L0,
+        "pixels_per_dm_pitch": (resolution-1)/20,
+        "selected_Noll_indices": list(noll),
+        "fit_diagnostics": {"L0_best_on_grid_boundary": boundary},
+        "closed_loop_temporal_psd_audit": {
+            "welch_variance_relative_error": 0.02
+        },
+    }
+
+
+def test_spatial_convergence_summary_does_not_claim_physical_r0_validation():
+    original = _synthetic_jolissaint_grid_entry(100, .1)
+    higher = _synthetic_jolissaint_grid_entry(201, .101)
+    result = assess_jolissaint_spatial_convergence({
+        "zernike": {"method": "zernike", "r0_m": .115},
+        "jolissaint": original,
+        "jolissaint_grid_201": higher,
+    })
+    assert result["status"] == "numerically_stable"
+    assert result["grid_resolutions"] == [100, 201]
+    assert result["r0_relative_range"] == pytest.approx(.01)
+    assert result["physical_r0_validated"] is False
+    assert result["physical_L0_validated"] is False
+    assert result["L0_at_grid_boundary"] == [True, True]
+    assert result["reference_method"] == "zernike"
+
+
+def test_spatial_grid_instability_is_explicit_without_changing_legacy():
+    d = {
+        "jolissaint": _synthetic_jolissaint_grid_entry(100, .1),
+        "jolissaint_grid_201": _synthetic_jolissaint_grid_entry(
+            201, .11, noll=(9, 10, 13)
+        ),
+    }
+    result = assess_jolissaint_spatial_convergence(d)
+    assert result["status"] == "needs_grid_review"
+    assert result["same_noll_mode_selection"] is False
+    assert result["r0_relative_range"] == pytest.approx(.1)
+    assert assess_jolissaint_spatial_convergence({
+        "jolissaint": d["jolissaint"]
+    })["status"] == "not_tested"
+    with pytest.raises(ValueError, match="tolerance"):
+        assess_jolissaint_spatial_convergence(d, tolerance=-.1)
