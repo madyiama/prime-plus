@@ -62,12 +62,12 @@ def test_local_table_is_preferred_over_header_proxy(tmp_path):
     trans_pct = 80.0 * np.exp(-0.5 * ((wave-1.60) / 0.04)**2)
     profile_path = tmp_path / "CH4short.dat"
     with profile_path.open("w") as stream:
-        stream.write("#Wavelength Transmission\\n")
+        stream.write("#Wavelength Transmission\n")
         for w, t in zip(wave, trans_pct):
-            stream.write(f"{w:.8f} {t:.8f}\\n")
+            stream.write(f"{w:.8f} {t:.8f}\n")
     wavelengths, bw, transmission, dispersion, meta = (
         keckUtils.samplingFilterProfile(
-            str(tmp_path), hdr, nWvl=3, return_metadata=True
+            str(tmp_path), hdr, nWvl=3, bwMin=10e-9, return_metadata=True
         )
     )
     assert meta["source"] == "local_transmission_table"
