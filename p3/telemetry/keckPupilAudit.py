@@ -10,7 +10,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
-from scipy.ndimage import map_coordinates, rotate
 
 from p3.telemetry.keckUtils import getPupilAngles
 
@@ -97,32 +96,16 @@ def read_mask(calibration_directory, report):
 
 
 def binary_pupil_on_grid(data, resolution, rotation_deg):
-    """Nearest-neighbour diagnostic mask, preserving binary transmission.
+    """Use exactly the bounded, area-averaged sampling of the P3 telescope.
 
-    Do not use cubic-spline interpolation for binary aperture support:
-    spline ringing can introduce fractional or negative transmission.
-    This test-only mask is not a calibrated pupil replacement.
+    Name kept for compatibility with the first P3 diagnostic script.
+    Fractional boundary amplitudes represent subpixel pupil occupancy,
+    not negative/overshooting cubic-spline transmission.
     """
-    native = np.asarray(data, dtype=float)
-    n = int(resolution)
-    if (native.ndim != 2 or native.shape[0] != native.shape[1]
-            or n < 16 or not np.isfinite(native).all()
-            or not np.isfinite(rotation_deg)):
-        raise ValueError("Invalid pupil data, rotation or output sampling")
-    if not np.any(native > 0):
-        raise ValueError("Pupil contains no positive transmission")
-    s = native.shape[0]
-    pixel = (np.arange(n) - (n - 1) / 2.0) * (s / n) + (s - 1) / 2.0
-    yy, xx = np.meshgrid(pixel, pixel, indexing="ij")
-    resized = map_coordinates(
-        (native > 0.5 * float(native.max())).astype(float),
-        [yy, xx], order=0, mode="constant", cval=0.0,
+    from p3.aoSystem.pupilTransforms import resample_binary_pupil
+    return resample_binary_pupil(
+        data, resolution, rotation_deg=rotation_deg, supersample=4,
     )
-    rotated = rotate(
-        resized, float(rotation_deg), reshape=False, order=0,
-        mode="constant", cval=0.0, prefilter=False,
-    )
-    return rotated > 0.5
 
 
 def diffraction_intensity(pupil_mask, oversample=2):
