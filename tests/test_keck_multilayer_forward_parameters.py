@@ -124,3 +124,9 @@ def test_invalid_reference_r0_rejected_before_forward():
     model = _model(7, r0=0.0)
     with pytest.raises(ValueError, match="positive r0"):
         _telemetry_forward_parameters(model)
+
+
+def test_missing_multilayer_ho_tt_gains_raise_clear_error():
+    model = psfR.__new__(psfR)
+    with pytest.raises(ValueError, match="two finite HO/TT gains"):
+        model.phase_structure_function(0.3654, [], Cn2=np.ones(7))
