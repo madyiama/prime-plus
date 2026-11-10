@@ -330,6 +330,12 @@ def run_audit(geometry, outer_scales):
     ):
         quality_flags.append("PHYSICAL_GRID_OUTSIDE_OTF_SUPPORT")
     return {
+        "modal_comparison_warning": (
+            "Hardy reference removes piston and tip-tilt; all three P3 "
+            "Flicker OTF-based curves currently remove piston only. "
+            "Differences are NOT meaningful model calibration until "
+            "cone tip-tilt is explicitly projected out on the same pupil."
+        ),
         "source_code_scope": (
             "audit only; production focal_angular_function default "
             "and matrix_to_map are untouched"
@@ -407,7 +413,7 @@ def _write_artifacts(result, destination: Path):
         )
     ax.plot(
         xx, [row["hardy_wfe_nm"] for row in result["sweep"]],
-        "k--", label="Hardy (Kolmogorov)",
+        "k--", label="Hardy (piston + tilt removed)",
     )
     ax.set_xticks(xx, labels)
     ax.set_xlabel("L0 [m] (infinity uses analytic Kolmogorov limit)")
