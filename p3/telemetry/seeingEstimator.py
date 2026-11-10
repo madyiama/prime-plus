@@ -403,6 +403,68 @@ def _fit_amplitude(observed, models, noll, radial, diameter, L0_grid):
     }
 
 
+def assess_jolissaint_spatial_convergence(results, tolerance=0.05):
+    """Summarize multi-grid Jolissaint agreement; never certify r0 from it.
+
+    Five-percent grid stability is a *numerical* tolerance, not an
+    absolute atmospheric uncertainty and not evidence that the 2018
+    Keck closed-loop correction is completely reproduced.
+    """
+    if not 0 < tolerance < 1:
+        raise ValueError("Spatial convergence tolerance must be (0,1)")
+    candidates = [
+        v for v in results.values()
+        if isinstance(v, dict) and v.get("method") == "jolissaint"
+    ]
+    candidates.sort(key=lambda v: int(v["dm_influence_resolution"]))
+    if len(candidates) < 2:
+        return {
+            "status": "not_tested",
+            "reason": "Need two independently generated DM IF grids",
+            "reference_method": "zernike",
+            "physical_r0_validated": False,
+        }
+    sizes = [int(v["dm_influence_resolution"]) for v in candidates]
+    if len(set(sizes)) != len(sizes):
+        raise ValueError("Repeated Jolissaint spatial grid")
+    selected = [v["selected_Noll_indices"] for v in candidates]
+    same_modes = all(s == selected[0] for s in selected[1:])
+    r0s = [float(v["r0_m"]) for v in candidates]
+    rel = float(max(r0s)/min(r0s) - 1)
+    L0s = [v["L0_m"] for v in candidates]
+    L0_boundary = [
+        bool(v["fit_diagnostics"]["L0_best_on_grid_boundary"])
+        for v in candidates
+    ]
+    stable = bool(rel <= tolerance and same_modes)
+    return {
+        "status": "numerically_stable" if stable else "needs_grid_review",
+        "grid_resolutions": sizes,
+        "pixels_per_DM_pitch": [
+            float(v["pixels_per_dm_pitch"]) for v in candidates
+        ],
+        "r0_m": r0s,
+        "r0_relative_range": rel,
+        "r0_relative_tolerance": float(tolerance),
+        "L0_m": L0s,
+        "L0_at_grid_boundary": L0_boundary,
+        "same_noll_mode_selection": same_modes,
+        "closed_loop_psd_variance_error": [
+            float(v["closed_loop_temporal_psd_audit"][
+                "welch_variance_relative_error"
+            ]) for v in candidates
+        ],
+        "reference_method": "zernike",
+        "physical_r0_validated": False,
+        "physical_L0_validated": False,
+        "note": (
+            "Numerical IF-grid convergence only. LGS TT absent; "
+            "closed-loop command transfer, WFS noise/aliasing and "
+            "dome seeing are independent validation limits."
+        ),
+    }
+
+
 def estimate_r0(
     diagnosis, *,
     method: Literal["zernike", "jolissaint"] = "zernike",
