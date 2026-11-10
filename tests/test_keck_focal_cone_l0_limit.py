@@ -104,3 +104,36 @@ def test_stationary_phase_structure_function_factors_exactly():
     exact = np.sum(weights*np.exp(-dphi/2))/weights.sum()
     stationary = np.exp(-dphi[0]/2)
     assert exact == pytest.approx(stationary, rel=1e-14)
+
+
+def test_l0_sweep_standalone_reuses_original_angular_grid_without_science_fit():
+    from scripts.keck_l0_cone_sweep import sweep_outer_scale
+
+    n = 24
+    y, x = np.indices((n, n))
+    otf = np.exp(-0.01*((x-n//2)**2 + (y-n//2)**2))
+    geometry = {
+        "weights": np.array([1.0]),
+        "heights": np.array([8208.713]),
+        "n_actu": 1,
+        "wavelength_m": 1.53e-6,
+        "r0_m": 0.4391188896,
+        "diameter_m": 10.5,
+        "samp_ref": 2.5,
+        "lgs_height_m": 122252.2957,
+        "otf_size": n,
+        "otf": otf,
+    }
+    rows = sweep_outer_scale(geometry, [31.045692, np.inf])
+    assert len(rows) == 2
+    assert rows[0]["L0_m"] == pytest.approx(31.045692)
+    assert rows[1]["L0_m"] == "infinity"
+    assert rows[0]["hardy_wfe_nm"] == pytest.approx(
+        rows[1]["hardy_wfe_nm"], rel=1e-13
+    )
+    for row in rows:
+        assert row["sf_zero_lag_rad2"] == pytest.approx(0, abs=1e-12)
+        assert row["flicker_pupil_wfe_nm"] > 0
+        assert row["flicker_strehl_equivalent_wfe_nm"] > 0
+        assert row["hardy_over_flicker_pupil_wfe"] > 0
+        assert np.isfinite(row["flicker_pupil_variance_rad2"])
