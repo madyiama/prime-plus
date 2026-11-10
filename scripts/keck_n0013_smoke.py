@@ -360,6 +360,15 @@ def main():
         str(args.calib.resolve()), path_save=str(args.output.resolve()),
         cam_fov=128, nLayer=1, addNCPA=False,
     ))
+    filter_profile_diagnostics = getattr(
+        trs.cam, "filter_profile_diagnostics", {}
+    )
+    if filter_profile_diagnostics:
+        (args.output / "filter_profile_diagnostics.json").write_text(
+            json.dumps(filter_profile_diagnostics, indent=2),
+            encoding="utf-8",
+        )
+        print("[NIRC2 filter]", filter_profile_diagnostics, flush=True)
     try:
         tt_jitter_model, model_policy_note = select_tt_jitter_mode(
             trs.aoMode, tt_jitter_model,
@@ -559,6 +568,7 @@ def main():
     (args.output / "metadata.json").write_text(json.dumps({
         "input_fits": str(args.fits.resolve()),
         "input_sav": str(args.sav.resolve()),
+        "filter_profile_diagnostics": filter_profile_diagnostics,
         "addNCPA": False,
         "ao_mode": str(trs.aoMode),
         "ho_covariance_policy": args.ho_covariance_policy,
