@@ -132,3 +132,20 @@ def test_inactive_filter_wheels_cannot_fabricate_passband(tmp_path):
     hdr["fwoname"] = "PK50_1.5"
     with pytest.raises(ValueError, match="No active NIRC2 science passband"):
         keckUtils.samplingFilterProfile(str(tmp_path), hdr)
+
+
+def test_official_ch4s_profile_alias_is_accepted(tmp_path):
+    # Official NIRC2 documentation says CH4S, whereas FITS has CH4_short.
+    curve = tmp_path / "CH4S.dat"
+    curve.write_text(
+        "#Wavelength Transmission\n"
+        "1.530 50\n"
+        "1.570 78\n"
+        "1.592 80\n"
+        "1.620 78\n"
+        "1.655 50\n"
+    )
+    name = keckUtils._find_filter_profile_file(
+        str(tmp_path), "CH4_short"
+    )
+    assert name == curve
