@@ -515,6 +515,27 @@ def main():
         help="Equivalent atmospheric layers (1=historical baseline; "
              "7=retain all MASS-DIMM altitude bins).",
     )
+    parser.add_argument(
+        "--p3-pupil-resampling", choices=("legacy", "physical_binary"),
+        default="legacy",
+        help=("P3 optical pupil sampling: legacy spline as baseline, "
+              "or subpixel area-averaged physically bounded Keck binary mask."),
+    )
+    parser.add_argument(
+        "--p3-pupil-parity", choices=("native", "flip_x", "flip_y"),
+        default="native",
+        help=("FITS pupil array parity hypothesis. Non-native parity requires "
+              "--p3-pupil-resampling physical_binary; verify against science "
+              "diffraction, never by blind PSF fitting."),
+    )
+    parser.add_argument(
+        "--p3-pupil-rotation",
+        choices=("header", "as_archived", "reverse_sign", "plus_90", "minus_90"),
+        default="header",
+        help=("P3 uncalibrated sensitivity comparison: header is KAON nominal; "
+              "alternatives change pupil+TT axes and must not be selected by "
+              "science-PSF fit."),
+    )
     parser.add_argument("--tt-sensitivity", action="store_true",
                         help="Compare PSFs for different TT noise-subtraction fractions")
     parser.add_argument(
@@ -614,6 +635,8 @@ def main():
         ),
     )
     args = parser.parse_args()
+    if args.p3_pupil_parity != "native" and args.p3_pupil_resampling != "physical_binary":
+        parser.error("--p3-pupil-parity flip_x/flip_y requires physical_binary")
     if args.r0_method != "zernike" and not args.p1_only:
         parser.error("--r0-method jolissaint/both requires --p1-only")
     with args.config.open("rb") as conf_file:
@@ -655,7 +678,38 @@ def main():
         str(args.calib.resolve()), path_save=str(args.output.resolve()),
         cam_fov=128, nLayer=args.n_layer, addNCPA=False,
     ))
-    pupil_diagnostics = getattr(trs.tel, "pupil_orientation", {})
+    # P3: explicit pupil hypotheses without changing the default legacy path.
+    pupil_diagnostics = dict(getattr(trs.tel, "pupil_orientation", {}))
+    if args.p3_pupil_resampling == "physical_binary":
+        from astropy.io import fits
+        from p3.telemetry.keckPupilAudit import (
+            pupil_orientation_report, read_mask,
+        )
+        p3_header = fits.getheader(args.fits, ignore_missing_end=True)
+        p3_report = pupil_orientation_report(p3_header)
+        mask_path, _ = read_mask(args.calib, p3_report)
+        # The historical telemetry loader silently falls back to OPEN for
+        # unsupported masks. The physical P3 path must never do that.
+        trs.tel.path_pupil = str(mask_path.resolve())
+        pupil_diagnostics["p3_mask_inventory"] = p3_report
+    nominal_angle = float(trs.tel.pupilAngle)
+    p3_angles = {
+        "header": nominal_angle,
+        "as_archived": 0.0,
+        "reverse_sign": -nominal_angle,
+        "plus_90": nominal_angle + 90.0,
+        "minus_90": nominal_angle - 90.0,
+    }
+    trs.tel.pupilAngle = float(p3_angles[args.p3_pupil_rotation])
+    trs.tel.pupil_resampling = args.p3_pupil_resampling
+    trs.tel.pupil_parity = args.p3_pupil_parity
+    pupil_diagnostics["p3_rotation_hypothesis"] = args.p3_pupil_rotation
+    pupil_diagnostics["p3_array_rotation_applied_deg"] = float(trs.tel.pupilAngle)
+    pupil_diagnostics["p3_pupil_sampling"] = args.p3_pupil_resampling
+    pupil_diagnostics["p3_input_array_parity"] = args.p3_pupil_parity
+    pupil_diagnostics["p3_rotation_zero_calibrated"] = False
+    pupil_diagnostics["p3_rotation_tt_axes_coupled"] = True
+    trs.tel.pupil_orientation = pupil_diagnostics
     massdimm_diagnostics = getattr(trs.atm, "massdimm_diagnostics", {})
     (args.output / "pupil_orientation_diagnostics.json").write_text(
         json.dumps(pupil_diagnostics, indent=2), encoding="utf-8"
@@ -924,6 +978,20 @@ def main():
         ho_covariance_policy=args.ho_covariance_policy,
         tt_kernel_convention=args.tt_kernel_convention,
     ))
+
+    # Telescope applies PupilResampling to the archived pupil at OTF build
+    # time. Record its *effective* transmission, not just the input CLI flag.
+    p3_model_pupil = getattr(model.ao.tel, "pupil_resampling_diagnostics", {})
+    (args.output / "p3_model_pupil_diagnostics.json").write_text(
+        json.dumps(p3_model_pupil, indent=2), encoding="utf-8",
+    )
+    if args.p3_pupil_resampling == "physical_binary":
+        p3_pupil_array = np.asarray(model.ao.tel.pupil, dtype=float)
+        if np.min(p3_pupil_array) < 0 or np.max(p3_pupil_array) > 1:
+            raise ValueError("P3 telescope pupil contains nonphysical amplitudes")
+        print("[P3 pupil] bounded mask",
+              p3_model_pupil.get("output_amplitude_min"),
+              p3_model_pupil.get("output_amplitude_max"), flush=True)
 
     # The WFS fit is already a line-of-sight r0. Its chromatic rescaling
     # must not have another airmass factor hidden in the INI parser.
@@ -1290,6 +1358,11 @@ def main():
         "error_breakdown_diagnostics": error_budget,
         "anisoplanatism_diagnostics": anisoplanatism_audit,
         "pupil_orientation_diagnostics": pupil_diagnostics,
+        "p3_pupil_resampling": args.p3_pupil_resampling,
+        "p3_pupil_parity": args.p3_pupil_parity,
+        "p3_pupil_rotation_hypothesis": args.p3_pupil_rotation,
+        "p3_array_rotation_applied_deg": float(trs.tel.pupilAngle),
+        "p3_model_pupil_diagnostics": p3_model_pupil,
         "massdimm_diagnostics": massdimm_diagnostics,
         "tt_kernel_convention": model.tt_kernel_convention,
         "tt_kernel_phase_structure_multiplier_vs_noll": (
