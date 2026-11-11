@@ -179,6 +179,13 @@ def test_four_ablation_output_invariants_are_checked_before_comparison(tmp_path)
     assert report["status"] == "model_only_ablation_complete"
     assert not report["best_fit_model_selected"]
     assert report["STRAP_noise_identical_all_four"]
+    variants = report["results"]
+    assert variants["A0_no_tt"]["kernel_effective_rms_axis_mas"] is None
+    assert variants["A1_legacy_physical"]["kernel_effective_rms_axis_mas"] == pytest.approx(20.0)
+    assert variants["A2_legacy_no16_diagnostic"]["kernel_effective_rms_axis_mas"] == pytest.approx(5.0)
+    assert variants["A2_legacy_no16_diagnostic"]["tt_kernel_dphi_multiplier_vs_noll"] == pytest.approx(1/16)
+    assert variants["A2_legacy_no16_diagnostic"]["kernel_is_physical_noll_convention"] is False
+    assert variants["A3_spectral_physical"]["kernel_effective_rms_axis_mas"] == pytest.approx(20.0)
     metadata_path = root/"A3_spectral_physical"/"metadata.json"
     j = json.loads(metadata_path.read_text())
     j["forward_parameters_diagnostics"]["r0_model_m"] = 0.54
