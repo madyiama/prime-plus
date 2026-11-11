@@ -17,6 +17,9 @@ import numpy as np
 
 from p3.telemetry.ttMechanicalAudit import timestamp_quality
 from p3.telemetry.ttNoise import estimate_tt_noise
+from p3.telemetry.ttConditionalCovariance import (
+    observed_centroid_cospectrum, conditional_residual_covariance,
+)
 
 
 def require_integrator(servo, *, rtol=1e-6):
@@ -198,6 +201,9 @@ def van_dam_gain_sensitivity(centroids,timestamps,servo, *,
     if b-a<nperseg:
         raise ValueError("No sufficiently long contiguous STRAP run")
     samples=x[a:b]
+    observed_freq, observed_cospectrum = observed_centroid_cospectrum(
+        samples,fs,nperseg=nperseg
+    )
     grid=np.linspace(0,fs/2,2049)
     trials=[]
     for g in optical_gains:
@@ -237,6 +243,12 @@ def van_dam_gain_sensitivity(centroids,timestamps,servo, *,
                     diag["predicted_observed_noise_fraction_per_axis"],
                 "warnings":[str(w.message) for w in warn],
                 "fit_bins":diag["fit_bin_count"],
+                "conditional_jitter_band_sensitivity":
+                    conditional_residual_covariance(
+                        observed_freq,observed_cospectrum,cov,
+                        sampling_hz=fs,controller_gain=gain,
+                        optical_gain=g,
+                    ),
             }
             trials.append(trial)
     return {
@@ -259,6 +271,7 @@ def van_dam_gain_sensitivity(centroids,timestamps,servo, *,
             "no_gain_ranking_from_sensor_noise_floors":True,
             "scientific_psf_used":False,
             "physical_jitter_covariance_estimated":False,
+            "only_unverified_band_limited_jitter_sensitivities":True,
             "note":(
                 "The white noise variance is re-estimated for each assumed "
                 "gain; low-frequency atmospheric PSD is unconstrained. "
