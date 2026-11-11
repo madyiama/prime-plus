@@ -211,8 +211,15 @@ def test_psfr_direct_angular_explicit_kernel_agrees_with_prior_noll_formula():
     old=angular_jitter_structure_function(
         opd_covariance_to_angular(c_opd,D),D,wl,us,vs,
     )
+    # Dphi is the mathematically primary comparison, including very
+    # high frequencies where the OTF is exponentially tiny.
     np.testing.assert_allclose(new,old,rtol=1e-13,atol=1e-13)
-    np.testing.assert_allclose(fake.otf_tt,np.exp(-old/2),rtol=1e-13)
+    # exp(-Dphi/2) maps a ~1e-13 phase absolute roundoff at Dphi~700
+    # into a ~1e-13 relative difference at OTF~1e-100. That has no
+    # image-domain significance; enforce precision where the OTF matters.
+    np.testing.assert_allclose(
+        fake.otf_tt,np.exp(-old/2),rtol=1e-13,atol=2e-15,
+    )
     fake.tt_kernel_dphi_multiplier_vs_noll=1/16
     legacy=fake.jitter_phase_structure_function(Ctt=c_opd)
     np.testing.assert_allclose(legacy,old/16,rtol=1e-13,atol=1e-13)
@@ -410,3 +417,21 @@ def test_native_arcsec_and_opd_welch_noise_estimation_are_scale_identical():
     )
     np.testing.assert_allclose(native*gain**2,opd,rtol=1e-12,atol=1e-26)
     assert diagnostics["fit_bin_count"] == diagnostics_opd["fit_bin_count"]
+
+
+def test_explicit_tt_covariance_without_mode_uses_no_telemetry_replay():
+    # A standalone covariance already has its units specified. Do not
+    # demand a Keck telemetry aoMode or raw detector samples for this path.
+    D=10.5
+    fake=psfR.__new__(psfR)
+    fake.trs=NS(tel=NS(pupilAngle=0.0))
+    fake.ao=NS(tel=NS(D=D),cam=NS(psInMas=9.942))
+    fake.freq=_freq(n=16,D=D)
+    fake.tt_axis_angle_deg=None
+    fake.tt_axis_parity="native"
+    fake.tt_kernel_dphi_multiplier_vs_noll=1.0
+    C_opd=np.diag([1e-13,2e-13])
+    dphi=fake.jitter_phase_structure_function(Ctt=C_opd)
+    assert np.isfinite(dphi).all()
+    assert dphi[dphi.shape[0]//2,dphi.shape[1]//2] == pytest.approx(0.0)
+    assert fake.otf_tt.max() == pytest.approx(1.0)
