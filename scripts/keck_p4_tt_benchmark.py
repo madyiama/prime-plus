@@ -301,9 +301,9 @@ def main():
                     "scientific_policy": "Do not clip non-PSD physical TT covariance",
                 }, indent=2), encoding="utf-8")
                 print(
-                    f"\\n[P4] {label} failed (exit {exit_code}); "
+                    f"\n[P4] {label} failed (exit {exit_code}); "
                     f"last {len(last_lines)} log lines from "
-                    f"{folder/'p4_console.log'}:\\n{log_tail}\\n",
+                    f"{folder/'p4_console.log'}:\n{log_tail}\n",
                     file=sys.stderr, flush=True,
                 )
                 raise RuntimeError(
