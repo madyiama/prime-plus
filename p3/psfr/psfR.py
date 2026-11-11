@@ -426,6 +426,13 @@ class psfR:
             from p3.aoSystem.tipTiltGeometry import zernike_tilt_opd_per_arcsec
             raw_arcsec = np.asarray(self.trs.tipTilt.slopes_arcsec, dtype=float)
             opd_measured = np.asarray(self.trs.tipTilt.slopes, dtype=float)
+            if raw_arcsec.shape != opd_measured.shape:
+                raise ValueError(
+                    "P4 STRAP raw angular samples and OPD samples have different "
+                    "shapes. Keck telemetry decimation currently does not decimate "
+                    "slopes_arcsec or update the TT sample rate/loop transfer; "
+                    "run P4 with decimation=1."
+                )
             opd_per_arcsec = zernike_tilt_opd_per_arcsec(self.trs.tel.D)
             expected_opd = (raw_arcsec - raw_arcsec.mean(axis=0))*opd_per_arcsec
             scale = max(float(np.max(np.abs(expected_opd))), 1e-24)
