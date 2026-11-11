@@ -354,6 +354,11 @@ def flux_segment_audit(raw_apd_counts, sky, imat, centroids_arcsec, loop,
     variation = float((flux.max()-flux.min())/flux.mean())
     enough = len(blocks) >= 6 and variation >= 0.10
     rho = float(spearmanr(flux, van).statistic) if enough else None
+    # A constant noise estimate can make Spearman undefined even when
+    # the flux spans a measurable range. No NaN JSON or false inference.
+    if rho is not None and not np.isfinite(rho):
+        rho = None
+        enough = False
     return {
         "segmentation": "predeclared_contiguous_nonoverlapping",
         "segment_length_frames": segment_length,
