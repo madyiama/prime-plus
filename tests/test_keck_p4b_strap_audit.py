@@ -191,3 +191,19 @@ def test_p4b_keck_transfer_initialization_fails_without_rtc_servo():
     del trs.ttloop.tf.num
     with pytest.raises(ValueError,match="RTC servo coefficients"):
         initialize_keck_loop_transfers(trs)
+
+
+
+def test_p4b_full_noise_audit_accepts_freshly_initialized_keck_rtc():
+    """Catch orchestration regressions between Keck loader and van Dam."""
+    trs=_raw_keck_rtc_stub(n=4096)
+    initialize_keck_loop_transfers(trs)
+    result=sensitivity_audit(
+        mock_centroids(), trs.ttloop,
+        bands=((0.65,0.95),),
+        welch_sizes=(512,),
+    )
+    assert len(result["rows"]) == 2
+    assert result["feedback"]["unity"]["algebra_verified"]
+    assert result["reference"]["mirror"] == "unity"
+    assert result["reference"]["welch_nperseg"] == 512
