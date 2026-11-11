@@ -112,5 +112,5 @@ def test_mismatched_input_or_timestamps_fail_not_give_jitter():
         audit_command_increments(y,u[:-1],t,SERVO)
     with pytest.raises(ValueError,match="length mismatch"):
         audit_command_increments(y,u,t[:-1],SERVO)
-    with pytest.raises(ValueError,match="non"):
+    with pytest.raises(ValueError,match="max_lag"):
         audit_command_increments(y,u,t,SERVO,max_lag=0)
