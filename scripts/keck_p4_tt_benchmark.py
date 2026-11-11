@@ -60,6 +60,14 @@ def summarize_existing_outputs(root):
         diagnostic = json.loads((folder/"tiptilt_diagnostics.json").read_text())
         metrics = json.loads((folder/"p4_tt_metrics.json").read_text())
         noise = json.loads((folder/"tt_noise_diagnostics.json").read_text())
+        angular_file = folder/"p4_tt_angular_chain.json"
+        chain = json.loads(angular_file.read_text()) if angular_file.exists() else None
+        if label != "A0_no_tt" and chain is not None:
+            if (chain.get("status")
+                    != "numerical_chain_verified_instrument_uncalibrated"):
+                raise ValueError(
+                    f"Angular OTF numerical audit not validated for {label}"
+                )
         if label == "A1_legacy_physical":
             source_noise_a1 = noise
         out[label] = {
@@ -88,6 +96,12 @@ def summarize_existing_outputs(root):
             "tt_enabled": metadata["tt_jitter_otf_enabled"],
             "psf": metrics["psf"],
             "camera_jitter": metrics["camera_angular_covariance"],
+            "tt_angular_chain": chain,
+            "tt_angular_chain_verified": bool(
+                chain is not None and
+                chain.get("status") ==
+                "numerical_chain_verified_instrument_uncalibrated"
+            ),
             "tt_diagnostics": {
                 key: diagnostic.get(key) for key in (
                     "raw_trace_m2", "noise_trace_m2",
@@ -157,6 +171,14 @@ def summarize_existing_outputs(root):
         "all_same_observation_and_forward_atmosphere": True,
         "STRAP_noise_identical_all_four": True,
         "A1_A2_same_physical_covariance": True,
+        "tt_angular_replay_verified_for_all_enabled_variants": all(
+            out[label]["tt_angular_chain_verified"]
+            for label in VARIANTS if label != "A0_no_tt"
+        ),
+        "previous_output_reconstruction_needed_for_angular_audit": not all(
+            out[label]["tt_angular_chain_verified"]
+            for label in VARIANTS if label != "A0_no_tt"
+        ),
         "tt_noise_spectral_cancellation": strap_noise_spectral_balance(
             source_noise_a1
         ),
