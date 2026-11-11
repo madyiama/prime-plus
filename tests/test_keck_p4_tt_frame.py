@@ -10,6 +10,7 @@ import pytest
 from p3.aoSystem.ttFrame import (
     RAD_TO_MAS, angular_covariance_metrics, camera_angular_covariance,
     psf_aperture_metrics, sensor_frame_frequencies,
+    strap_noise_spectral_balance,
 )
 from p3.psfr.psfR import psfR
 
@@ -189,3 +190,25 @@ def test_ablation_refuses_sensor_noise_difference(tmp_path):
     }))
     with pytest.raises(ValueError, match="noise floor"):
         analyse(root)
+
+
+def test_strap_psd_cancellation_is_signed_not_clipped():
+    f = np.linspace(0, 50, 101)
+    m = np.ones_like(f)
+    n = np.where(f >= 25, 1.3, 0.7)
+    result = strap_noise_spectral_balance({
+        "frequency_hz": f.tolist(),
+        "measured_psd_x_m2_per_hz": m.tolist(),
+        "measured_psd_y_m2_per_hz": m.tolist(),
+        "model_noise_psd_x_m2_per_hz": n.tolist(),
+        "model_noise_psd_y_m2_per_hz": n.tolist(),
+    })
+    assert result["status"] == "diagnostic_only"
+    assert result["x"]["negative_residual_frequency_bin_fraction"] > 0.45
+    assert result["x"]["negative_residual_integral_magnitude_opd_m2"] > 0
+    assert result["x"]["positive_residual_integral_opd_m2"] > 0
+    assert result["x"]["residual_integral_signed_opd_m2"] == pytest.approx(
+        result["x"]["positive_residual_integral_opd_m2"] -
+        result["x"]["negative_residual_integral_magnitude_opd_m2"]
+    )
+    assert "not a physical jitter PSD" in result["warning"]
