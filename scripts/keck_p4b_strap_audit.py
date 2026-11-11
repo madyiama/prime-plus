@@ -167,7 +167,7 @@ def main():
             "Keck STRAP to NIRC2 axis registration",
         ],
         "r0_or_psf_fitting_performed": False,
-        "covariance_non_psd_is_reported_not_clipped": True,
+        "historical_van_dam_psd_projection_is_flagged_and_disallowed_for_physical_inference": True,
         "no_hypothesis_ranked_by_image_agreement": True,
     }
     path = args.output/"p4b_strap_noise_audit.json"
