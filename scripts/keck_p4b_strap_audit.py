@@ -20,6 +20,7 @@ from scipy.io import readsav
 
 from p3.telemetry.ttP4BAudit import (
     BANDS, MIRRORS, WELCH_SIZES, sensitivity_audit, flux_segment_audit,
+    initialize_keck_loop_transfers,
 )
 from p3.telemetry.ttApdNoise import reproduce_keck_centroids
 
@@ -140,6 +141,12 @@ def main():
     if (trs.tipTilt.slopes_arcsec.shape != centroids.shape or
             not np.array_equal(trs.tipTilt.slopes_arcsec,centroids)):
         raise ValueError("Keck telemetry loader does not preserve aligned raw centroids")
+    # telemetryKeck loads RTC controller coefficients, sample frequencies
+    # and delays, but tf.freq/wfs/servo/lag/rtf are set ONLY by P3's
+    # systemDiagnosis.temporal_transfer_function(). Initialize precisely
+    # that stage, without running atmospheric r0/L0 or HO diagnosis.
+    print("[P4-B] initializing P3 RTC STRAP W/K/P/S transfers", flush=True)
+    loop_initialization = initialize_keck_loop_transfers(trs)
     loop = trs.ttloop
     print("[P4-B] van Dam preset bands/Welch and transfer hypotheses",flush=True)
     noise = sensitivity_audit(centroids,loop)
@@ -156,6 +163,7 @@ def main():
         "source_revision": _revision(),
         "sample_count": int(len(centroids)),
         "loop_frequency_hz": float(loop.freq),
+        "loop_transfer_initialization": loop_initialization,
         "data_contract": independent,
         "van_dam_and_loop_sensitivity": noise,
         "apd_flux_segments": flux,
