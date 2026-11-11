@@ -65,7 +65,7 @@ def test_coherence_and_phase_recover_time_delay_without_sky_gain():
     u,g,t,ids=_case()
     result=audit_dtt_mechanics(u,g,t,ids,nperseg=512)
     spectral=result["spectral_response"]
-    assert spectral["total_independent_welch_windows"]>=6
+    assert spectral["total_welch_windows_50_percent_overlap"]>=6
     for axis in spectral["axes"]:
         assert axis["phase_fit_bins"]>=6
         assert axis["phase_delay_fit_ms"]==pytest.approx(4.,abs=1.0)
