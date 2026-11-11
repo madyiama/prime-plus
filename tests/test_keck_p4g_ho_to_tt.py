@@ -30,7 +30,7 @@ def _model(k,*,r0=.12,L0=25,loop=None,offset=None,
         weights=weights,wind_speeds_m_s=(7.,15.),
         wind_dirs_deg=(0.,40.),
         loop_frequency_hz=np.array([0.,1.,300.]) if loop is not None else None,
-        loop_sensitivity_power=np.array([0.,loop,loop])
+        loop_sensitivity_power=np.array([loop,loop,loop])
             if loop is not None else None,
         low_band_hz=0.,high_band_hz=250.,
         science_offset_pupil_arcsec=offset,
