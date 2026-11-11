@@ -149,8 +149,8 @@ def _configuration_stability(u,gd,ids,bad,*,lag,global_matrix,
         xc=x-x.mean(axis=0)
         singular=np.linalg.svd(xc,compute_uv=False)
         cond=float(singular[0]/singular[-1]) if singular[-1]>0 else np.inf
-        item["command_excitation_condition"]=cond
-        if cond>cond_max:
+        item["command_excitation_condition"]=cond if np.isfinite(cond) else None
+        if not np.isfinite(cond) or cond>cond_max:
             item["status"]="skipped_unidentifiable_command_directions"
             segments.append(item)
             continue
