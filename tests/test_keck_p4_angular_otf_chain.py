@@ -326,3 +326,42 @@ def test_psfr_rejects_corrupted_centroid_opd_unit_chain():
     fake.tt_kernel_dphi_multiplier_vs_noll=1.0
     with pytest.raises(ValueError,match="angular-to-OPD conversion inconsistent"):
         fake.jitter_phase_structure_function()
+
+
+def test_forward_structure_function_applies_tt_once_at_science_wavelength():
+    """P4 dphi_tt is already in science-wavelength radians^2."""
+    fake=psfR.__new__(psfR)
+    n=32
+    yy,xx=np.indices((n,n),dtype=float)
+    fake.dphi_ao=np.zeros((n,n))
+    fake.dphi_fit=np.zeros((n,n))
+    fake.dphi_alias=np.zeros((n,n))
+    fake.dphi_tt=(yy-n//2)**2*0.01+(xx-n//2)**2*0.025
+    fake.freq=NS(isAniso=False)
+    fake.ao=NS(src=NS(nSrc=1))
+    for gain in (0.,0.4,1.):
+        sf=fake.phase_structure_function(0.1,[1.0,gain])
+        np.testing.assert_allclose(
+            sf[:,:,0],gain*fake.dphi_tt,rtol=1e-13,atol=1e-13
+        )
+        np.testing.assert_allclose(
+            np.exp(-0.5*sf[:,:,0]),
+            np.exp(-0.5*gain*fake.dphi_tt),rtol=1e-13
+        )
+
+
+def test_pixel_otf_uses_same_detector_frequency_grid_as_direct_tt():
+    D=10.5
+    f=_freq(n=64,D=D)
+    fake=psfR.__new__(psfR)
+    fake.ao=NS(tel=NS(D=D),cam=NS(psInMas=9.942))
+    fake.freq=f
+    nu_row,nu_col=angular_otf_frequencies(
+        f,D,f.wvlRef,pixel_scale_mas=9.942
+    )
+    pixel_rad=9.942*1e-3*ARCSEC_TO_RAD
+    expected=np.sinc(nu_row*pixel_rad)*np.sinc(nu_col*pixel_rad)
+    np.testing.assert_allclose(
+        fake.pixel_optical_transfer_function(),expected,
+        rtol=1e-13,atol=1e-13
+    )
