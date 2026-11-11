@@ -69,6 +69,10 @@ def summarize_existing_outputs(root):
             "ao_mode": metadata["ao_mode"],
             "n_layer": metadata["forward_parameters_diagnostics"]["atmosphere_layers"],
             "r0_model_m": metadata["forward_parameters_diagnostics"]["r0_model_m"],
+            "L0_tel_m": metadata["atmosphere_reconstruction_audit"]["fitted_L0_m"],
+            "layer_weights": metadata["atmosphere_reconstruction_audit"]["atmosphere_layer_weights"],
+            "layer_heights_m": metadata["atmosphere_reconstruction_audit"]["atmosphere_layer_heights_m"],
+            "forward_layer_strengths": metadata["forward_parameters_diagnostics"]["layer_strengths_m_to_minus_5_over_3"],
             "wavelength_m": metadata["psf_reference_wavelength_m"],
             "pupil_resampling": metadata["p3_pupil_resampling"],
             "pupil_parity": metadata["p3_pupil_parity"],
@@ -100,7 +104,8 @@ def summarize_existing_outputs(root):
     baseline = out["A0_no_tt"]
     invariants = [
         "input_fits", "input_sav", "revision", "ao_mode",
-        "n_layer", "r0_model_m", "wavelength_m",
+        "n_layer", "r0_model_m", "L0_tel_m", "layer_weights",
+        "layer_heights_m", "forward_layer_strengths", "wavelength_m",
         "pupil_resampling", "pupil_parity", "pupil_rotation",
         "tt_axis_angle_deg", "tt_axis_parity", "tt_axis_legacy_coupling",
         "tt_noise_method", "tt_noise_model",
