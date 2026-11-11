@@ -126,3 +126,64 @@ def psf_aperture_metrics(psf, radii_px=(3, 5, 10, 20)):
         "no_science_source_fitting": True,
         "second_moment_fov_dependent": True,
     }
+
+
+def strap_noise_spectral_balance(noise_diagnostics):
+    """Quantify measured-minus-model STRAP residual spectra without clipping.
+
+    The van Dam model predicts observed measurement-noise PSD as
+    |S(f)|^2 P_n(f), not the physical motion in the camera.
+    Binwise negative differences are allowed by finite Welch sampling;
+    the integral and cancellation ratio are diagnostic, not an estimate
+    of a physical negative atmospheric spectrum or a fitted jitter.
+    """
+    from scipy.integrate import trapezoid
+
+    keys = {
+        "x": ("measured_psd_x_m2_per_hz", "model_noise_psd_x_m2_per_hz"),
+        "y": ("measured_psd_y_m2_per_hz", "model_noise_psd_y_m2_per_hz"),
+    }
+    required = ["frequency_hz"] + [k for pair in keys.values() for k in pair]
+    absent = [key for key in required if key not in noise_diagnostics]
+    if absent:
+        return {"status": "missing_van_dam_psd_inputs",
+                "missing_keys": absent}
+    f = np.asarray(noise_diagnostics["frequency_hz"], dtype=float)
+    if (f.ndim != 1 or len(f) < 3 or not np.isfinite(f).all()
+            or np.any(np.diff(f) <= 0)):
+        raise ValueError("STRAP PSD frequency grid must be strictly increasing")
+    out = {"status": "diagnostic_only", "integrated_band_hz": [
+        float(f[0]), float(f[-1]),
+    ]}
+    for axis, (k_meas, k_noise) in keys.items():
+        measured = np.asarray(noise_diagnostics[k_meas], dtype=float)
+        predicted_noise = np.asarray(noise_diagnostics[k_noise], dtype=float)
+        if (measured.shape != f.shape or predicted_noise.shape != f.shape
+                or not np.isfinite(measured).all()
+                or not np.isfinite(predicted_noise).all()
+                or np.any(measured < 0) or np.any(predicted_noise < 0)):
+            raise ValueError("Invalid STRAP sensor/noise PSD samples")
+        residual = measured-predicted_noise
+        measured_power = float(trapezoid(measured, f))
+        noise_power = float(trapezoid(predicted_noise, f))
+        out[axis] = {
+            "measured_integral_opd_m2": measured_power,
+            "predicted_measured_noise_integral_opd_m2": noise_power,
+            "ratio_model_noise_to_measured_power": (
+                noise_power/measured_power if measured_power > 0 else None
+            ),
+            "residual_integral_signed_opd_m2": float(trapezoid(residual, f)),
+            "negative_residual_frequency_bin_fraction": float(np.mean(residual < 0)),
+            "negative_residual_integral_magnitude_opd_m2": float(
+                trapezoid(np.maximum(-residual, 0), f)
+            ),
+            "positive_residual_integral_opd_m2": float(
+                trapezoid(np.maximum(residual, 0), f)
+            ),
+        }
+    out["warning"] = (
+        "This is the measured-centroid PSD minus predicted sensor-noise "
+        "PSD at the WFS output, not a physical jitter PSD. Negative bins "
+        "are preserved and must not be clipped to obtain a desired PSF."
+    )
+    return out
