@@ -460,3 +460,60 @@ def test_legacy_tt_covariance_mock_without_ao_mode_keeps_non_psd_diagnostic():
     assert np.isfinite(sf).all()
     assert fake.tiptilt_diagnostics["negative_variance_projected"]
     assert fake.tiptilt_diagnostics["tt_source_angle_replay"] is None
+
+
+def test_strap_float32_archive_is_promoted_before_opd_noise_scaling():
+    """Regression: n0013 real telemetry failed by 2.27e-8 (target 2e-9).
+
+    Float32 archive * Python-float gain can silently remain float32.
+    The native arcsec Welch estimator uses float64. Both routes should
+    therefore use float64 before mean subtraction, gain and Welch.
+    """
+    from p3.aoSystem.tipTiltGeometry import strap_centroids_arcsec_float64
+    from p3.telemetry.ttNoise import estimate_tt_noise
+
+    rng = np.random.default_rng(20201202)
+    archived = (0.03 * rng.standard_normal((4096, 2))).astype(np.float32)
+    raw = strap_centroids_arcsec_float64(archived)
+    assert archived.dtype == np.float32
+    assert raw.dtype == np.float64
+    assert raw.shape == archived.shape
+    np.testing.assert_array_equal(raw, archived.astype(np.float64))
+    gain = zernike_tilt_opd_per_arcsec(10.5)
+    opd = (raw * gain)
+    opd -= opd.mean(axis=0)
+    assert opd.dtype == np.float64
+
+    f = np.linspace(0, 300, 257)
+    kw = {
+        "method": "van_dam",
+        "sample_rate_hz": 600.0,
+        "rejection_frequency_hz": f,
+        "rejection_transfer": np.ones_like(f),
+        "high_frequency_band": (0.65, 0.95),
+        "nperseg": 512,
+    }
+    noise_native, _ = estimate_tt_noise(raw, **kw)
+    noise_opd, _ = estimate_tt_noise(opd, **kw)
+    residual = np.max(np.abs(noise_native - noise_opd / gain**2))
+    scale = max(np.max(np.abs(noise_native)),
+                np.max(np.abs(noise_opd / gain**2)))
+    assert residual / scale < 2e-9
+
+    # The buggy route is a real roundoff difference, not a physical
+    # disagreement between the estimates.
+    pre_fix = gain * archived
+    assert pre_fix.dtype == np.float32
+    noise_pre_fix, _ = estimate_tt_noise(pre_fix, **kw)
+    old_relative_error = (
+        np.max(np.abs(noise_native - noise_pre_fix / gain**2)) / scale
+    )
+    assert old_relative_error > 2e-9
+
+
+def test_strap_archive_centroids_reject_invalid_dtype_and_shape():
+    from p3.aoSystem.tipTiltGeometry import strap_centroids_arcsec_float64
+    with pytest.raises(ValueError, match="DTTCENTROIDS"):
+        strap_centroids_arcsec_float64(np.ones((10, 3), dtype=np.float32))
+    with pytest.raises(ValueError, match="DTTCENTROIDS"):
+        strap_centroids_arcsec_float64(np.array([[0., np.nan]]))
