@@ -536,6 +536,19 @@ def main():
               "alternatives change pupil+TT axes and must not be selected by "
               "science-PSF fit."),
     )
+    parser.add_argument(
+        "--tt-slope-source",
+        choices=("centroids", "centroids_aligned", "command_increment"),
+        default="centroids",
+        help=(
+            "P4-F controlled TT-only input source: centroids (original "
+            "unmodified baseline), centroids_aligned (drop first STRAP "
+            "sample for exact A/B), or command_increment (replace TT "
+            "slopes by diff(DTTCOMMANDS)/DT_SERVO gain, then drop first "
+            "sample in all TT channels). Re-estimates van Dam/Gendron "
+            "noise from the selected signal; NOT a sky-angle calibration."
+        ),
+    )
     parser.add_argument("--tt-sensitivity", action="store_true",
                         help="Compare PSFs for different TT noise-subtraction fractions")
     parser.add_argument(
@@ -741,6 +754,25 @@ def main():
         str(args.calib.resolve()), path_save=str(args.output.resolve()),
         cam_fov=128, nLayer=args.n_layer, addNCPA=False,
     ))
+    # P4-F: substitute TT slopes BEFORE systemDiagnosis (noise estimator)
+    # and psfR (jitter covariance). HO telemetry and atmospheric r0 stay
+    # untouched. The aligned baseline crops the same frame as replay.
+    from p3.telemetry.ttCommandReplay import apply_tt_slope_source
+    tt_command_replay_report = apply_tt_slope_source(
+        trs,
+        list(np.asarray(trs.ttloop.tf.num,dtype=float).reshape(-1))
+        +list(np.asarray(trs.ttloop.tf.den,dtype=float).reshape(-1)),
+        args.tt_slope_source,
+    )
+    (args.output / "tt_command_replay.json").write_text(
+        json.dumps(tt_command_replay_report,indent=2,allow_nan=False),
+        encoding="utf-8",
+    )
+    print("[TT source]",args.tt_slope_source,
+          "frames=",trs.tipTilt.nExp,
+          "replay relative error=",
+          tt_command_replay_report.get("relative_rms_error_vs_centroids"),
+          flush=True)
     # P3: explicit pupil hypotheses without changing the default legacy path.
     pupil_diagnostics = dict(getattr(trs.tel, "pupil_orientation", {}))
     if args.p3_pupil_resampling == "physical_binary":
@@ -1443,7 +1475,12 @@ def main():
             "P4 LGS TT lacks validated DTTCENTROIDS -> angular covariance path"
         )
     angular_report = {
-        "source": "Keck B.DTTCENTROIDS in arcsec",
+        "source": (
+            "Keck B.DTTCENTROIDS in nominal arcsec"
+            if args.tt_slope_source != "command_increment"
+            else "Keck diff(B.DTTCOMMANDS)/DT_SERVO[0], "
+                 "nominal arcsec-equivalent; not independent"
+        ),
         "otf_domain": "angular spatial frequencies [cycles/radian]",
         "covariance_domain": "angular image-motion covariance [radian^2]",
         "tt_model": tt_jitter_model,
@@ -1487,7 +1524,10 @@ def main():
         np.save(args.output / "p4_otf_tt.npy", otf)
     stage("comparison figure", lambda: _plot_comparison(
         trs.cam.image, psf, args.output / "comparison_nirc2_psfr.png",
-        dataset_label=f"Keck/NIRC2 {args.fits.name} — {trs.aoMode}",
+        dataset_label=(
+            f"Keck/NIRC2 {args.fits.name} — {trs.aoMode}"
+            f" — TT {args.tt_slope_source}"
+        ),
         science_filter=filter_profile_diagnostics.get("filter_name"),
         reference_wavelength_um=1e6 * float(model.freq.wvlRef),
     ))
@@ -1530,6 +1570,9 @@ def main():
         ),
         "tt_noise_method_requested": tt_method,
         "tt_noise_method": effective_tt_noise_method,
+        "tt_slope_source": args.tt_slope_source,
+        "tt_command_replay": tt_command_replay_report,
+        "tt_source_command_units_independently_verified": False,
         "tt_selection": tt_selection_report,
         "tt_selection_profile": tt_selection.profile,
         "tt_selection_source": tt_selection.source,
