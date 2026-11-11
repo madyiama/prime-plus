@@ -508,8 +508,14 @@ class psfR:
             self, 'tt_kernel_dphi_multiplier_vs_noll', 1.0
         )
         dphi_used = legacy_multiplier * dphi
-        self.otf_tt = np.exp(-dphi_used/2)
         if initial_tt_model:
+            # get_error_breakdown() calls this function twice with explicit
+            # *component* covariances (sensor noise and atmosphere). Those
+            # diagnostic calls must NOT replace the full TT OTF used by
+            # the science forward model and persisted in p4_otf_tt.npy.
+            # The forward SF remains self.dphi_tt, initialized from this
+            # full covariance; only initial model construction owns otf_tt.
+            self.otf_tt = np.exp(-dphi_used/2)
             self.tiptilt_diagnostics.update({
                 'tt_axis_camera_angle_deg': tt_axis_angle,
                 'tt_axis_camera_parity': tt_axis_parity,
