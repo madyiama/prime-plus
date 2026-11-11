@@ -50,13 +50,18 @@ def summarize_existing_outputs(root):
     Can be tested on synthetic fixtures without running Keck telemetry.
     Does not decide which jitter covariance should be considered physical.
     """
+    from p3.aoSystem.ttFrame import strap_noise_spectral_balance
+
     out = {}
+    source_noise_a1 = None
     for label in VARIANTS:
         folder = root/label
         metadata = json.loads((folder/"metadata.json").read_text())
         diagnostic = json.loads((folder/"tiptilt_diagnostics.json").read_text())
         metrics = json.loads((folder/"p4_tt_metrics.json").read_text())
         noise = json.loads((folder/"tt_noise_diagnostics.json").read_text())
+        if label == "A1_legacy_physical":
+            source_noise_a1 = noise
         out[label] = {
             "input_fits": metadata["input_fits"],
             "input_sav": metadata["input_sav"],
@@ -130,6 +135,9 @@ def summarize_existing_outputs(root):
         "all_same_observation_and_forward_atmosphere": True,
         "STRAP_noise_identical_all_four": True,
         "A1_A2_same_physical_covariance": True,
+        "tt_noise_spectral_cancellation": strap_noise_spectral_balance(
+            source_noise_a1
+        ),
         "source_fitting_performed": False,
         "best_fit_model_selected": False,
         "instrument_gain_calibrated": False,
