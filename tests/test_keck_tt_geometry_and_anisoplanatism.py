@@ -107,23 +107,60 @@ def _psfr_stub(aniso, layers, layer_kernels):
 
 
 def test_one_layer_lgs_anisoplanatism_is_included_in_forward_model():
-    model = _psfr_stub(True, 1, np.ones((1, 4, 4)) * 10)
+    # A physical phase SF is zero at zero baseline. Use spatial variation
+    # plus a deliberate interpolation DC offset, rather than a constant map
+    # that must vanish entirely after the P2 normalization.
+    yy, xx = np.indices((4, 4))
+    rho2 = (xx - 2)**2 + (yy - 2)**2
+    raw = 10.0 + 2.0 * rho2
+    model = _psfr_stub(True, 1, raw[None, :, :])
     r0 = 0.2
     sf = model.phase_structure_function(r0, [1, 1], Cn2=None)
-    expected = 10 * r0**(-5/3) * (500e-9/2e-6)**2
+    expected = (raw - raw[2, 2]) * r0**(-5/3) * (500e-9/2e-6)**2
     assert sf.shape == (4, 4, 1)
-    np.testing.assert_allclose(sf, expected)
-    assert np.all(sf > 0)
+    np.testing.assert_allclose(sf[:, :, 0], expected)
+    np.testing.assert_allclose(sf[2, 2, :], 0.0, atol=1e-14)
+    assert np.any(sf > 0)
+    assert model.dani_raw_zero_lag_rad2[0] == pytest.approx(
+        10.0 * r0**(-5/3) * (500e-9/2e-6)**2
+    )
 
 
 def test_multilayer_anisoplanatism_in_science_wavelength_units():
+    # Different spatial shapes ensure the Cn2 weights affect the map,
+    # not merely a common amplitude. Constant offsets at each layer
+    # represent interpolation DC errors and must cancel at zero lag.
+    yy, xx = np.indices((4, 4))
+    rho2 = (xx - 2)**2 + (yy - 2)**2
     raw = np.array([
-        np.full((4, 4), 2.0),
-        np.full((4, 4), 6.0),
+        2.0 + rho2,
+        6.0 + 0.5 * rho2**2,
     ])
     model = _psfr_stub(True, 2, raw)
     sf = model.phase_structure_function(0.2, [1, 1], Cn2=[2.0, 5.0])
-    np.testing.assert_allclose(sf, (2*2 + 6*5) * (500e-9/2e-6)**2)
+    expected = (
+        2.0 * (raw[0] - raw[0, 2, 2])
+        + 5.0 * (raw[1] - raw[1, 2, 2])
+    ) * (500e-9/2e-6)**2
+    assert sf.shape == (4, 4, 1)
+    np.testing.assert_allclose(sf[:, :, 0], expected)
+    np.testing.assert_allclose(sf[2, 2, :], 0.0, atol=1e-14)
+    assert np.any(sf > 0)
+    assert model.dani_raw_zero_lag_rad2[0] == pytest.approx(
+        (2.0*2.0 + 5.0*6.0) * (500e-9/2e-6)**2
+    )
+
+
+def test_constant_anisoplanatic_offsets_cannot_create_spurious_otf_attenuation():
+    # Regression for P2: nonzero Dphi(0) is an OTF-flux normalization
+    # defect, not a constant physical blur. The forward SF must vanish.
+    raw = np.array([np.full((4, 4), 2.0), np.full((4, 4), 6.0)])
+    model = _psfr_stub(True, 2, raw)
+    sf = model.phase_structure_function(0.2, [1, 1], Cn2=[2.0, 5.0])
+    np.testing.assert_allclose(sf, np.zeros((4, 4, 1)), atol=1e-14)
+    assert model.dani_raw_zero_lag_rad2[0] == pytest.approx(
+        (2.0*2.0 + 5.0*6.0) * (500e-9/2e-6)**2
+    )
 
 
 def test_no_anisoplanatism_returns_base_sf_only():

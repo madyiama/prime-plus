@@ -12,7 +12,9 @@ import os
 from scipy.io import readsav
 from astropy.io import fits
 from p3.aoSystem.deformableMirror import deformableMirror
-from p3.aoSystem.tipTiltGeometry import zernike_tilt_opd_per_arcsec
+from p3.aoSystem.tipTiltGeometry import (
+    zernike_tilt_opd_per_arcsec, strap_centroids_arcsec_float64,
+)
 import p3.aoSystem.FourierUtils as FourierUtils
 import p3.telemetry.keckUtils as keckUtils
 from p3.telemetry.massdimm import fetch_data, DIMM, MASS, MASSPROF, CombineMASSandDIMM
@@ -455,8 +457,15 @@ class telemetryKeck:
         # the old empirical 0.18 and 3.2 factors again.
         if 'b' in trsData:
             self.tipTilt.tilt2meter = zernike_tilt_opd_per_arcsec(self.tel.D)
-            self.tipTilt.slopes_arcsec = np.copy(trsData.B['DTTCENTROIDS'][0])
-            self.tipTilt.slopes = np.copy(self.tipTilt.slopes_arcsec)
+            # readsav may store Keck DTTCENTROIDS as float32. Promote the
+            # archive values BEFORE multiplying by the metres/arcsec gain:
+            # a Python float times float32 ndarray can remain float32.
+            # Otherwise P4's independently replayed native-angular noise
+            # differs from the OPD route by ~2e-8 solely from rounding.
+            self.tipTilt.slopes_arcsec = strap_centroids_arcsec_float64(
+                trsData.B['DTTCENTROIDS'][0]
+            )
+            self.tipTilt.slopes = self.tipTilt.slopes_arcsec.copy()
             self.tipTilt.com_raw = np.copy(trsData.B['DTTCOMMANDS'][0])
             self.tipTilt.com = np.copy(self.tipTilt.com_raw)
             self.tipTilt.intensity = np.copy(trsData.B['APDCOUNTS'][0])
