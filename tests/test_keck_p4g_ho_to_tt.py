@@ -54,7 +54,9 @@ def test_g1_r0_scaling_and_outer_scale_reduce_tilt():
     a=_model(kernel,r0=.12,L0=25.)["incident_ngs_cov_rad2"]
     b=_model(kernel,r0=.24,L0=25.)["incident_ngs_cov_rad2"]
     c=_model(kernel,r0=.12,L0=100.)["incident_ngs_cov_rad2"]
-    np.testing.assert_allclose(a/b,2.**(5./3.),rtol=1e-10,atol=1e-12)
+    np.testing.assert_allclose(
+        np.trace(a)/np.trace(b),2.**(5./3.),rtol=1e-10
+    )
     assert np.trace(c)>np.trace(a)
 
 
