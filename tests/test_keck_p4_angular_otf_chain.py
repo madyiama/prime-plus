@@ -517,3 +517,84 @@ def test_strap_archive_centroids_reject_invalid_dtype_and_shape():
         strap_centroids_arcsec_float64(np.ones((10, 3), dtype=np.float32))
     with pytest.raises(ValueError, match="DTTCENTROIDS"):
         strap_centroids_arcsec_float64(np.array([[0., np.nan]]))
+
+
+def test_error_budget_component_kernels_do_not_overwrite_full_science_otf():
+    """P4 regression: reporting noise/atmosphere WFE must not alter OTF_TT.
+
+    In the original P4-A implementation get_error_breakdown() called the
+    kernel twice with explicit component Ctt and thereby replaced the
+    saved model.otf_tt with the atmosphere-only component, while the
+    actual science forward model still used the full self.dphi_tt.
+    """
+    raw = _synthetic_keck_centroids(1024)
+    D = 10.5
+    gain = zernike_tilt_opd_per_arcsec(D)
+    model = psfR.__new__(psfR)
+    model.ao = NS(tel=NS(D=D), cam=NS(psInMas=9.942))
+    model.freq = _freq(n=32, D=D)
+    model.trs = NS(
+        aoMode="LGS", tel=NS(D=D, pupilAngle=46.76723),
+        tipTilt=NS(
+            slopes_arcsec=raw,
+            slopes=(raw - raw.mean(axis=0))*gain,
+            Cn_tt=np.diag([1e-6, 2e-6])*gain**2,
+            nExp=len(raw),
+        ),
+        ttloop=NS(tf=NS(pn=0.12)),
+    )
+    model.tt_covariance_mode="legacy_psfr"
+    model.tt_mirror_model="unity"
+    model.tt_welch_nperseg=512
+    model.tt_axis_angle_deg=None
+    model.tt_axis_parity="native"
+    model.tt_kernel_dphi_multiplier_vs_noll=1.
+    full_dphi=model.jitter_phase_structure_function()
+    reference_otf=np.exp(-0.5*full_dphi)
+    np.testing.assert_allclose(model.otf_tt,reference_otf,rtol=1e-13,atol=1e-15)
+    full_otf=model.otf_tt.copy()
+    model.jitter_phase_structure_function(Ctt=model.tt_noise_cov)
+    np.testing.assert_array_equal(model.otf_tt,full_otf)
+    model.jitter_phase_structure_function(Ctt=model.tt_atmos_cov)
+    np.testing.assert_array_equal(model.otf_tt,full_otf)
+    assert np.trace(model.tt_noise_cov) > 0
+    assert np.trace(model.tt_atmos_cov) > 0
+    np.testing.assert_allclose(
+        full_otf,np.exp(-full_dphi/2),rtol=1e-13,atol=1e-15,
+    )
+
+
+def test_gendron_scale_n0120_angular_jitter_moments_are_not_amplified():
+    """The archive's n0120 Gendron covariance yields ~29mas/axis directly.
+
+    An independent FFT of a zero-mean angular Gaussian reproduces the
+    expected *pixel* covariance, without an adjustable Noll factor.
+    This verifies the angular kernel, not the STRAP on-sky optical gain.
+    """
+    cov_opd=np.array([
+        [1.3329513438951995e-13,-5.217482561061653e-16],
+        [-5.217482561061653e-16,1.3855813819134202e-13],
+    ])
+    D=10.5
+    px_mas=9.942
+    mas_per_rad=1.0/(ARCSEC_TO_RAD*1e-3)
+    ctheta=opd_covariance_to_angular(cov_opd,D)
+    expected_cpix=ctheta*(mas_per_rad/px_mas)**2
+    n=128
+    freq=np.fft.fftfreq(n, d=px_mas/mas_per_rad)
+    fr,fc=np.meshgrid(freq,freq,indexing="ij")
+    otf=np.exp(-2*np.pi**2*(
+        ctheta[0,0]*fr**2+2*ctheta[0,1]*fr*fc+ctheta[1,1]*fc**2
+    ))
+    image=np.fft.fftshift(np.fft.ifft2(otf).real)
+    image/=image.sum()
+    rr,cc=np.indices((n,n),dtype=float)
+    rr-=n//2
+    cc-=n//2
+    actual_cpix=np.array([
+        [(image*rr**2).sum(),(image*rr*cc).sum()],
+        [(image*rr*cc).sum(),(image*cc**2).sum()],
+    ])
+    np.testing.assert_allclose(actual_cpix,expected_cpix,rtol=2e-5,atol=2e-8)
+    sigma_mas=np.sqrt(np.linalg.eigvalsh(ctheta))*mas_per_rad
+    np.testing.assert_allclose(sigma_mas,[28.68266554,29.25446158],rtol=1e-8)
