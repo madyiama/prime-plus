@@ -191,7 +191,7 @@ def _figures(root, rows):
         rms_eff = row["kernel_effective_rms_axis_mas"]
         rms = "off" if rms_eff is None else f"{rms_eff:.1f} mas"
         ax.set_title(
-            f"{short_title[label]}" + "\\n"
+            f"{short_title[label]}" + chr(10)
             + f"Noyau effectif {rms} RMS/axe | pic {peak:.4g}",
             fontsize=10,
         )
