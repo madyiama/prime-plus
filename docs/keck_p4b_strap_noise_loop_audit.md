@@ -165,3 +165,38 @@ validation channel.
   angular TT covariance, model selection or OTF.
 - Instrument-gain uncertainty and 2016-vs-2020 mirror
   calibration clearly disclosed.
+
+
+## Correction de l'initialisation Keck RTC (11/11/2026)
+
+Un premier test n0013 s'arrêtait avant le balayage van Dam :
+
+```
+AttributeError: 'structtype' object has no attribute 'freq'
+  ... from_p3_tiptilt_loop -> tf.freq
+```
+
+`telemetryKeck` charge le taux d'échantillonnage et les paramètres
+du contrôleur STRAP (`DT_SERVO`) mais ne calcule pas les fonctions
+de transfert complexes. Dans la reconstruction complète, c'est
+`systemDiagnosis.temporal_transfer_function()` qui initialise
+`ttloop.tf.freq/wfs/servo/lag/rtf`.
+
+P4-B utilise désormais `initialize_keck_loop_transfers(trs)`,
+qui appelle **exactement cette même méthode P3** par une instance
+de diagnostic dépourvue de calcul atmosphérique. Ainsi, on construit
+les transferts instrumentaux sans déclencher la soustraction HO,
+la reconstruction Zernike, ni les fits `r0/L0`.
+
+Des tests synthétiques vérifient cette initialisation sur des
+coefficients RTC bruts, l'identité du rejet avec le modèle
+`unity` et la gestion d'un contrôleur incomplet.
+
+**Il s'agissait d'un défaut d'orchestration du script, pas
+d'une divergence démontrée du modèle STRAP.** Le message
+`Cupy import failed; P3 will fall back to CPU use` ne bloque
+pas l'exécution ; le calcul CPU est prévu par P3.
+
+Après mise à jour de la branche, relancer les mêmes tests puis
+la commande n0013 ci-dessus. Le nouveau rapport expose
+`loop_transfer_initialization` et sa provenance.
