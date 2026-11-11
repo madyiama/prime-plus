@@ -13,6 +13,25 @@ import numpy as np
 ARCSEC_TO_RAD = np.pi / (180.0 * 3600.0)
 
 
+def strap_centroids_arcsec_float64(archived_centroids):
+    """Copy Keck STRAP centroids into float64 BEFORE applying D/4.
+
+    scipy.io.readsav can return DTTCENTROIDS in float32. Multiplying a
+    float32 array by a Python float (metres/arcsec) may keep float32
+    dtype, adding ~1e-8 relative rounding to the reconstructed covariance.
+    The independent P4 angular noise estimate is float64, so such a
+    second rounding makes identical noise estimators appear inconsistent.
+
+    The archived float32 values retain their original acquisition
+    quantization; promoting to float64 cannot restore lost information.
+    """
+    values = np.asarray(archived_centroids, dtype=np.float64)
+    if (values.ndim != 2 or values.shape[1] != 2
+            or not np.all(np.isfinite(values))):
+        raise ValueError("Keck DTTCENTROIDS must be finite (frames, 2) arcsec")
+    return np.array(values, dtype=np.float64, copy=True)
+
+
 def zernike_tilt_opd_per_arcsec(telescope_diameter_m: float) -> float:
     """Metres RMS OPD per arcsec image motion for Z2/Z3 = 2*rho*cos/sin(phi)."""
     if not np.isfinite(telescope_diameter_m) or telescope_diameter_m <= 0:
