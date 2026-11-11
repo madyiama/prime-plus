@@ -225,3 +225,43 @@ def test_strap_psd_cancellation_is_signed_not_clipped():
         result["x"]["negative_residual_integral_magnitude_opd_m2"]
     )
     assert "not a physical jitter PSD" in result["warning"]
+
+
+def test_apd_archived_angular_centroids_reproduce_same_gaussian_otf_without_extra_factor():
+    """Angle-domain and Noll-OPD-domain routes must be exactly equivalent.
+
+    DTTCENTROIDS are labelled arcsec in the Keck telemetry. Converting
+    arcsec -> a_zernike=D*theta/4 -> theta=4*a/D is optional bookkeeping;
+    neither route permits multiplying an angular covariance by 16 again.
+    """
+    from p3.aoSystem.tipTiltGeometry import (
+        ARCSEC_TO_RAD, angular_jitter_structure_function,
+        opd_covariance_to_angular,
+    )
+
+    telescope_diameter = 10.5
+    wavelength = 2.055501e-6
+    sigma_arcsec = np.array([0.030, 0.045])
+    c_arcsec2 = np.diag(sigma_arcsec**2)
+    c_angle = c_arcsec2 * ARCSEC_TO_RAD**2
+    c_noll_opd = c_arcsec2 * (
+        telescope_diameter * ARCSEC_TO_RAD/4.0
+    )**2
+    np.testing.assert_allclose(
+        opd_covariance_to_angular(c_noll_opd, telescope_diameter),
+        c_angle, rtol=1e-13, atol=1e-27,
+    )
+    uv = np.linspace(-0.6, 0.6, 15)
+    u, v = np.meshgrid(uv, uv)
+    dphi_direct = (2*np.pi*telescope_diameter/wavelength)**2 * (
+        c_angle[0, 0]*u**2+c_angle[1, 1]*v**2
+    )
+    dphi_noll_route = angular_jitter_structure_function(
+        opd_covariance_to_angular(c_noll_opd, telescope_diameter),
+        telescope_diameter, wavelength, u, v,
+    )
+    np.testing.assert_allclose(dphi_noll_route, dphi_direct, rtol=1e-13, atol=1e-13)
+    # Old historical formula used a Noll OPD covariance in an angular
+    # baseline kernel without the 4/D inverse mapping.
+    np.testing.assert_allclose(dphi_noll_route/16,
+                               dphi_direct/16, rtol=1e-13)
