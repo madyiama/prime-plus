@@ -173,7 +173,14 @@ uv run python scripts/keck_p4g_ho_to_tt.py \
 ```
 
 Le fichier `results/n0120_p4g_ho_tt/p4g_ho_to_tt.json`
-contient G1, G2, G3, G4, G5.
+contient G1, G2, G3, G4, G5. La figure
+`results/n0120_p4g_ho_tt/p4g_ho_to_tt.png` présente le
+RMS atmosphérique prédit/mesuré sur bande commune, le ratio
+`alpha(g)`, les sensibilités `r0/L0` et vents, ainsi que le
+statut G5. **Le tilt de meilleur plan de Noll n'est pas
+nécessairement identique à la mesure angulaire de la quad-cellule
+STRAP** ; ce choix de projection constitue lui aussi une hypothèse
+à valider avant calibration du gain.
 
 Si l'offset est **déjà connu dans le repère de la pupille** :
 
