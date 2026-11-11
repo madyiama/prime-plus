@@ -2,6 +2,34 @@
 
 P3 is a collection of libraries for Adaptive Optics (AO) Point Spread Function (PSF) modeling, simulation, fitting and reconstruction.
 
+## Keck/NIRC2 telemetry PSF-R V1 (MADYIAMA)
+
+The stable **numerical** baseline for Keck LGS/NIRC2 is described in
+[docs/psfr_keck_v1_release_acceptance.md](docs/psfr_keck_v1_release_acceptance.md).
+The single locked recipe lives in [config/psfr_keck_v1.toml](config/psfr_keck_v1.toml)
+and its end-to-end gate is [scripts/keck_psfr_v1_e2e.py](scripts/keck_psfr_v1_e2e.py).
+
+For one real observation:
+
+```bash
+uv run --with pytest python -m pytest -q tests/test_keck_psfr_v1_release.py
+uv run python scripts/keck_psfr_v1_e2e.py \\
+  --fits /path/to/n0120.fits \\
+  --sav /path/to/n0120_LGS_trs.sav \\
+  --calib p3/aoSystem/data/KECK_CALIBRATION \\
+  --output results/psfr_v1_acceptance
+```
+
+This baseline uses **van Dam (65–95% Nyquist, Welch 512), legacy_psfr,
+unity TT plant, Noll angular OTF, 7 atmospheric layers, physical Keck pupil
+resampling and strict HO covariance**. Angular anisokinetism is already
+modelled by P3 `dani_tt`; do **not** inject it into the NGS residual jitter.
+No science-image fitting or unverified STRAP optical gain correction is applied.
+Instrument-specific absolute TT calibration and HO atmospheric inference
+remain scientifically provisional. Exploratory audit scripts P4-B–G are not
+part of the production recipe.
+
+
 The list of libraries is:
 
 * [aoSystem](https://github.com/astro-tiptop/P3/tree/main/p3/aoSystem) → The main purpose of this library is to model an AO PSF. It is an analytical simulator based on a Fourier appoach.
