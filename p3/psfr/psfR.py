@@ -18,6 +18,7 @@ from p3.aoSystem.fourierModel import fourierModel
 import p3.aoSystem.FourierUtils as FourierUtils
 import p3.psfr.psfrUtils as psfrUtils
 from p3.aoSystem.frequencyDomain import frequencyDomain as frequencyDomain
+from p3.aoSystem.ttFrame import sensor_frame_frequencies
 from p3.aoSystem.tipTiltGeometry import (
     opd_covariance_to_angular,
     project_covariance_to_psd,
@@ -84,7 +85,8 @@ class psfR:
                  compute_dphi_jitter=True, tt_covariance_mode='legacy_psfr',
                  tt_mirror_model='unity', tt_welch_nperseg=512,
                  ho_covariance_policy='strict',
-                 tt_kernel_convention='noll_angular'):
+                 tt_kernel_convention='noll_angular',
+                 tt_axis_angle_deg=None, tt_axis_parity='native'):
         """
         Instantiating the psf-reconstruction model from a telemetry object
         """
@@ -105,6 +107,16 @@ class psfR:
             raise ValueError("Unknown TT mirror model: " + str(tt_mirror_model))
         if not isinstance(tt_welch_nperseg, (int, np.integer)) or tt_welch_nperseg < 128:
             raise ValueError("TT Welch segment length must be integer >= 128")
+        # Independent TT axes: None preserves historical coupling to the
+        # telescope's pupilAngle for bitwise-comparable old PSFs. An explicit
+        # angle is a hypothesis pending STRAP/NIRC2 frame calibration.
+        if tt_axis_angle_deg is not None and not np.isfinite(tt_axis_angle_deg):
+            raise ValueError("TT sensor-to-camera axis angle must be finite")
+        if tt_axis_parity not in ('native', 'flip_x', 'flip_y'):
+            raise ValueError("Unknown TT sensor-to-camera parity")
+        self.tt_axis_angle_deg = (None if tt_axis_angle_deg is None
+                                  else float(tt_axis_angle_deg))
+        self.tt_axis_parity = tt_axis_parity
         self.tt_covariance_mode = tt_covariance_mode
         self.tt_mirror_model = tt_mirror_model
         self.tt_welch_nperseg = int(tt_welch_nperseg)
@@ -300,6 +312,7 @@ class psfR:
         Only the final OTF kernel is expressed in angle [rad^2]. Retain the
         current noise estimator, but make its non-PSD decomposition explicit.
         """
+        initial_tt_model = Ctt is None
         if Ctt is None:
             s = self.trs.tipTilt.slopes
             self.Ctt = np.dot(s.T, s)/self.trs.tipTilt.nExp
@@ -397,18 +410,29 @@ class psfR:
             )
 
         Ctheta = opd_covariance_to_angular(Ctt, self.ao.tel.D)
-        ang = self.trs.tel.pupilAngle * np.pi/180
+        axis_override = getattr(self, 'tt_axis_angle_deg', None)
+        tt_axis_angle = (
+            float(self.trs.tel.pupilAngle) if axis_override is None
+            else float(axis_override)
+        )
+        tt_axis_parity = getattr(self, 'tt_axis_parity', 'native')
         unit = self.freq.sampRef/2
-        if ang:
-            Ur = unit * (self.freq.U_*np.cos(ang) + self.freq.V_*np.sin(ang))
-            Vr = unit * (-self.freq.U_*np.sin(ang) + self.freq.V_*np.cos(ang))
-        else:
-            Ur = unit * self.freq.U_
-            Vr = unit * self.freq.V_
+        Ur, Vr = sensor_frame_frequencies(
+            unit*self.freq.U_, unit*self.freq.V_,
+            tt_axis_angle, parity=tt_axis_parity,
+        )
 
         dphi = angular_jitter_structure_function(
             Ctheta, self.ao.tel.D, self.freq.wvlRef, Ur, Vr
         )
+        if initial_tt_model:
+            self.tiptilt_diagnostics.update({
+                'tt_axis_camera_angle_deg': tt_axis_angle,
+                'tt_axis_camera_parity': tt_axis_parity,
+                'tt_axis_uses_legacy_pupil_angle': axis_override is None,
+                'tt_axis_independently_calibrated': False,
+                'physical_total_covariance_opd_m2': np.asarray(Ctt).tolist(),
+            })
         return getattr(self, 'tt_kernel_dphi_multiplier_vs_noll', 1.0) * dphi
 
     def _legacy_tiptilt_covariance(self, noise_raw):
