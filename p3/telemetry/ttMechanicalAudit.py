@@ -8,7 +8,7 @@ gauge correlation is NOT a measurement of the residual sky tip-tilt.
 from __future__ import annotations
 
 import numpy as np
-from scipy.signal import welch, csd, coherence
+from scipy.signal import welch, csd
 
 
 def timestamp_quality(raw_timestamp, *, tick_seconds=1e-7, gap_ratio=1.5):
@@ -180,66 +180,105 @@ def _configuration_stability(u,gd,ids,bad,*,lag,global_matrix,
 
 
 def _spectral(u,gd,bad,runs,*,matrix,intercept,lag,fs,nperseg=1024,split=0.7):
-    """Frequency response of *command-equivalent* reconstructed gauge axes.
+    """Estimate transfer/coherence by Welch on timestamp-contiguous blocks.
 
-    Frequency fits use a continuous timestamp segment only. The gauge
-    projection comes from TRAIN-only regression. Scalar pairwise coherence
-    is descriptive; when command axes are cross-correlated it does not
-    provide a uniquely identified MIMO transfer matrix.
+    Pool *spectra*, never blindly concatenate timestamp-disjoint blocks.
+    Welch cross-spectra need multiple segments: with only one, measured
+    coherence is identically 1 and is scientifically meaningless.
+    The gauge projection comes from TRAIN-only level regression.
+    This is descriptive single-axis coherence, not a calibrated MIMO TF.
     """
     if np.linalg.matrix_rank(matrix)<2:
         raise ValueError("Gauge mixing matrix has rank <2")
-    p=np.linalg.pinv(matrix) # (3,2); output is in archived command-equivalent units
-    m=(gd-intercept)@p
+    m=(gd-intercept)@np.linalg.pinv(matrix)  # command-equivalent units
     split_at=int(len(u)*split)
-    valid_runs=[(a,b) for a,b in runs if b-a>=nperseg]
-    independent=[(max(a,split_at),b) for a,b in valid_runs
-                 if b-max(a,split_at)>=nperseg]
-    if independent:
-        a,b=max(independent,key=lambda z:z[1]-z[0])
-        segment_role="held_out_validation"
-    elif valid_runs:
-        a,b=max(valid_runs,key=lambda z:z[1]-z[0])
-        segment_role="all_frames_not_independent"
-    else:
-        return {"status":"insufficient_contiguous_frames",
-                "longest_run":max(b-a for a,b in runs),
-                "required_nperseg":nperseg}
-    if b-a<2*nperseg:
-        return {"status":"insufficient_welch_segments",
-                "segment_range":[a,b],
-                "frames":b-a,
-                "required_frames":2*nperseg}
-    out={"status":"ok","segment_range":[a,b],"segment_role":segment_role,
-         "nperseg":nperseg,"sample_rate_hz":fs,"axes":[]}
+    original=int(nperseg)
+    candidates=sorted(set([original,512,256,128]),reverse=True)
+    candidates=[x for x in candidates if x<=original and x>=128]
+    choice=None
+    for nseg in candidates:
+        for role in ("held_out_validation","all_frames_not_independent"):
+            candidates_runs=[
+                (max(a,split_at) if role=="held_out_validation" else a,b)
+                for a,b in runs
+            ]
+            candidates_runs=[(a,b) for a,b in candidates_runs if b-a>=nseg]
+            segment_counts=[
+                1+(b-a-nseg)//(nseg//2)
+                for a,b in candidates_runs
+            ]
+            if sum(segment_counts)>=6:
+                choice=(nseg,role,candidates_runs,segment_counts)
+                break
+        if choice is not None:
+            break
+    if choice is None:
+        return {
+            "status":"insufficient_contiguous_welch_segments",
+            "requested_nperseg":original,
+            "longest_run_frames":int(max(b-a for a,b in runs)),
+            "required_segment_count":6,
+        }
+    nseg,role,selected,segment_counts=choice
+    out={
+        "status":"ok",
+        "segment_role":role,
+        "nperseg_requested":original,
+        "nperseg_effective":nseg,
+        "sample_rate_hz":float(fs),
+        "timestamp_contiguous_block_count":len(selected),
+        "total_independent_welch_windows":sum(segment_counts),
+        "axes":[],
+    }
     for axis in range(2):
-        x=u[a:b,axis]-np.mean(u[a:b,axis])
-        y=m[a:b,axis]-np.mean(m[a:b,axis])
-        kwargs=dict(fs=fs,nperseg=nperseg,noverlap=nperseg//2,
+        psd_x=psd_y=cspec=None
+        f=None
+        n_total=0
+        kwargs=dict(fs=fs,nperseg=nseg,noverlap=nseg//2,
                     detrend="linear",scaling="density")
-        f,pxx=welch(x,**kwargs)
-        _,pxy=csd(x,y,**kwargs)
-        _,coh=coherence(x,y,fs=fs,nperseg=nperseg,
-                         noverlap=nperseg//2,detrend="linear")
-        H=pxy/np.maximum(pxx,np.finfo(float).tiny)
-        fit=(f>=3)&(f<=min(80,0.3*fs))&(coh>=0.8)&(
-            pxx>=np.percentile(pxx[(f>=3)&(f<=min(80,0.3*fs))],25))
-        fit_count=int(np.sum(fit))
+        for (a,b),count in zip(selected,segment_counts):
+            x=u[a:b,axis]-np.mean(u[a:b,axis])
+            y=m[a:b,axis]-np.mean(m[a:b,axis])
+            f,p_x=welch(x,**kwargs)
+            _,p_y=welch(y,**kwargs)
+            _,p_xy=csd(x,y,**kwargs)
+            if psd_x is None:
+                psd_x=np.zeros_like(p_x)
+                psd_y=np.zeros_like(p_y)
+                cspec=np.zeros_like(p_xy)
+            psd_x+=p_x*count
+            psd_y+=p_y*count
+            cspec+=p_xy*count
+            n_total+=count
+        psd_x/=n_total
+        psd_y/=n_total
+        cspec/=n_total
+        H=cspec/np.maximum(psd_x,np.finfo(float).tiny)
+        coh=np.abs(cspec)**2/np.maximum(
+            psd_x*psd_y,np.finfo(float).tiny
+        )
+        coh=np.clip(coh,0,1)
+        fmax=min(80.,0.3*fs)
+        candidate=(f>=3.)&(f<=fmax)
+        fit=candidate&(coh>=0.8)&(
+            psd_x>=np.percentile(psd_x[candidate],25)
+        )
         phase_delay=None
         phase_error=None
-        if fit_count>=6:
-            ff=f[fit]; hh=H[fit]
-            # Circular phase residual to a pure delay, NOT a claim that
-            # the actual DTT is a frequency-independent pure delay.
+        if np.sum(fit)>=6:
+            ff=f[fit];hh=H[fit]
+            # Circular phase residual, allowing frequency response to
+            # deviate from a pure delay. Requires both strong excitation
+            # and coherent transfer bins.
             tau=np.arange(0.,(max(abs(lag),1)+6)/fs,0.0001)
             angular=np.angle(hh[None,:]*np.exp(
                 2j*np.pi*tau[:,None]*ff[None,:]
             ))
-            weights=(coh[fit]*pxx[fit])
-            weights=weights/weights.sum()
+            weights=coh[fit]*psd_x[fit]
+            weights/=weights.sum()
             loss=np.sum(weights[None,:]*angular**2,axis=1)
             j=int(np.argmin(loss))
-            phase_delay=float(tau[j]*1000)
+            phase_delay=float(tau[j]*1000.)
             phase_error=float(np.sqrt(loss[j])*180/np.pi)
         bands=[]
         for lo,hi in [(0,5),(5,20),(20,50),(50,100),(100,200)]:
@@ -252,19 +291,20 @@ def _spectral(u,gd,bad,runs,*,matrix,intercept,lag,fs,nperseg=1024,split=0.7):
                     "median_command_equivalent_gain":float(np.median(np.abs(H[mask]))),
                 })
         out["axes"].append({
-            "axis":axis,"coherence_bands":bands,
+            "axis":axis,
+            "coherence_bands":bands,
             "phase_delay_fit_ms":phase_delay,
             "phase_rms_error_deg":phase_error,
-            "phase_fit_bins":fit_count,
+            "phase_fit_bins":int(np.sum(fit)),
             "frequency_hz":f.tolist(),
             "coherence":coh.tolist(),
             "transfer_gain":np.abs(H).tolist(),
             "transfer_phase_deg":np.angle(H,deg=True).tolist(),
         })
     out["warning"]=(
-        "Frequency response is projected into command-equivalent units. "
-        "The gauge-to-sky geometric/angular gain is not calibrated; "
-        "shared closed-loop excitation does not independently identify it."
+        "Scalar axis-pair coherence after projection; controller axes "
+        "may be correlated. These are archived-command-equivalent units. "
+        "No gauge-to-sky angular calibration or optical gain identified."
     )
     return out
 
