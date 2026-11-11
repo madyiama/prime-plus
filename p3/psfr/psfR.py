@@ -19,6 +19,12 @@ import p3.aoSystem.FourierUtils as FourierUtils
 import p3.psfr.psfrUtils as psfrUtils
 from p3.aoSystem.frequencyDomain import frequencyDomain as frequencyDomain
 from p3.aoSystem.ttFrame import sensor_frame_frequencies
+from p3.aoSystem.ttAngular import (
+    direct_angular_tt_covariance,
+    assert_equivalent_angular_covariances,
+    angular_otf_frequencies,
+    gaussian_tt_otf,
+)
 from p3.aoSystem.tipTiltGeometry import (
     opd_covariance_to_angular,
     project_covariance_to_psd,
@@ -409,22 +415,90 @@ class psfR:
                 Ctt, label="Explicit TT kernel covariance"
             )
 
+        # Independent path: retain the historical OPD noise estimator, but
+        # independently replay the complete physical covariance directly from
+        # the archived Keck STRAP angular centroids. The D/4 and 4/D pair
+        # must cancel numerically; otherwise do not emit a science PSF.
         Ctheta = opd_covariance_to_angular(Ctt, self.ao.tel.D)
+        angular_audit = None
+        if (initial_tt_model and str(self.trs.aoMode).upper() == 'LGS'
+                and hasattr(self.trs.tipTilt, 'slopes_arcsec')):
+            from p3.aoSystem.tipTiltGeometry import zernike_tilt_opd_per_arcsec
+            raw_arcsec = np.asarray(self.trs.tipTilt.slopes_arcsec, dtype=float)
+            opd_measured = np.asarray(self.trs.tipTilt.slopes, dtype=float)
+            opd_per_arcsec = zernike_tilt_opd_per_arcsec(self.trs.tel.D)
+            expected_opd = (raw_arcsec - raw_arcsec.mean(axis=0))*opd_per_arcsec
+            scale = max(float(np.max(np.abs(expected_opd))), 1e-24)
+            unit_error = float(np.max(np.abs(expected_opd-opd_measured)))/scale
+            if raw_arcsec.shape != opd_measured.shape or unit_error > 2e-10:
+                raise ValueError(
+                    "DTTCENTROIDS angular-to-OPD conversion inconsistent: "
+                    f"relative error={unit_error:.3e}; check D/4, arcsec and telemetry units"
+                )
+            direct_cov, direct_diag = direct_angular_tt_covariance(
+                raw_arcsec, noise_raw, self.trs.tel.D,
+                method=self.tt_covariance_mode,
+                pn=float(self.trs.ttloop.tf.pn),
+                ttloop=self.trs.ttloop,
+                mirror_model=self.tt_mirror_model,
+                nperseg=self.tt_welch_nperseg,
+            )
+            angular_audit = assert_equivalent_angular_covariances(
+                Ctt, direct_cov, self.ao.tel.D,
+            )
+            angular_audit.update({
+                'dt_centroids_input_unit': 'arcsec',
+                'opd_intermediate_unit': 'm_rms_noll',
+                'opd_intermediate_gain_m_per_arcsec': float(opd_per_arcsec),
+                'centroid_opd_reencode_relative_error': unit_error,
+                'direct_angular_replay': direct_diag,
+            })
+            Ctheta = direct_cov
+
         axis_override = getattr(self, 'tt_axis_angle_deg', None)
         tt_axis_angle = (
             float(self.trs.tel.pupilAngle) if axis_override is None
             else float(axis_override)
         )
         tt_axis_parity = getattr(self, 'tt_axis_parity', 'native')
+
+        # Pupil-baseline and detector-pixel Fourier grids are checked
+        # against each other. The returned frequencies are cycles/radian.
+        pixel_scale = getattr(getattr(self.ao, 'cam', None), 'psInMas', None)
+        nu_row, nu_col = angular_otf_frequencies(
+            self.freq, self.ao.tel.D, self.freq.wvlRef,
+            pixel_scale_mas=pixel_scale,
+        )
+        nu_sensor_row, nu_sensor_col = sensor_frame_frequencies(
+            nu_row, nu_col, tt_axis_angle, parity=tt_axis_parity,
+        )
+        dphi, otf_tt = gaussian_tt_otf(
+            Ctheta, nu_sensor_row, nu_sensor_col,
+        )
+
+        # Cross-check the previous Noll OPD/phase expression rather than
+        # quietly changing the physical model during a noise audit.
         unit = self.freq.sampRef/2
-        Ur, Vr = sensor_frame_frequencies(
+        u_old, v_old = sensor_frame_frequencies(
             unit*self.freq.U_, unit*self.freq.V_,
             tt_axis_angle, parity=tt_axis_parity,
         )
-
-        dphi = angular_jitter_structure_function(
-            Ctheta, self.ao.tel.D, self.freq.wvlRef, Ur, Vr
+        old_dphi = angular_jitter_structure_function(
+            Ctheta, self.ao.tel.D, self.freq.wvlRef, u_old, v_old
         )
+        model_scale = max(float(np.max(np.abs(dphi))), 1e-30)
+        kernel_error = float(np.max(np.abs(dphi-old_dphi)))/model_scale
+        if kernel_error > 2e-10:
+            raise ValueError(
+                "Direct-angular Gaussian TT OTF disagrees with the "
+                f"Noll/OPD path: relative error={kernel_error:.3e}"
+            )
+
+        legacy_multiplier = getattr(
+            self, 'tt_kernel_dphi_multiplier_vs_noll', 1.0
+        )
+        dphi_used = legacy_multiplier * dphi
+        self.otf_tt = np.exp(-dphi_used/2)
         if initial_tt_model:
             self.tiptilt_diagnostics.update({
                 'tt_axis_camera_angle_deg': tt_axis_angle,
@@ -432,8 +506,15 @@ class psfR:
                 'tt_axis_uses_legacy_pupil_angle': axis_override is None,
                 'tt_axis_independently_calibrated': False,
                 'physical_total_covariance_opd_m2': np.asarray(Ctt).tolist(),
+                'tt_otf_direct_angular_noll_relative_error': kernel_error,
+                'tt_otf_zero_lag': float(self.otf_tt[
+                    self.otf_tt.shape[0]//2, self.otf_tt.shape[1]//2
+                ]),
+                'tt_otf_min': float(np.min(self.otf_tt)),
+                'tt_otf_max': float(np.max(self.otf_tt)),
+                'tt_source_angle_replay': angular_audit,
             })
-        return getattr(self, 'tt_kernel_dphi_multiplier_vs_noll', 1.0) * dphi
+        return dphi_used
 
     def _legacy_tiptilt_covariance(self, noise_raw):
         """Preserve original PR #2 behaviour for reproducible comparisons."""
