@@ -41,6 +41,7 @@ def noll_opd_noise_to_angular(noise_opd_m2, diameter_m):
 def direct_angular_tt_covariance(
     centroids_arcsec, noise_covariance_opd_m2, diameter_m, *,
     method, pn=None, ttloop=None, mirror_model="unity", nperseg=512,
+    native_noise_arcsec2=None,
 ):
     """Re-evaluate model's TT covariance in rad² from source angles.
 
@@ -53,7 +54,32 @@ def direct_angular_tt_covariance(
     """
     values = np.asarray(centroids_arcsec, dtype=float)
     measured = raw_centroid_covariance_rad2(values)
-    noise_rad2 = noll_opd_noise_to_angular(noise_covariance_opd_m2, diameter_m)
+    if native_noise_arcsec2 is not None:
+        native_noise_arcsec2 = np.asarray(native_noise_arcsec2, dtype=float)
+        if native_noise_arcsec2.shape != (2, 2) or not np.isfinite(
+            native_noise_arcsec2
+        ).all():
+            raise ValueError("Native STRAP noise must be finite 2x2 arcsec^2")
+        noise_rad2 = native_noise_arcsec2 * ARCSEC_TO_RAD**2
+        noise_source = "noise_estimator_directly_on_DTTCENTROIDS_arcsec"
+        opd_noise_rad2 = noll_opd_noise_to_angular(
+            noise_covariance_opd_m2, diameter_m,
+        )
+        diff = np.max(np.abs(noise_rad2-opd_noise_rad2))
+        scale = max(
+            float(np.max(np.abs(noise_rad2))),
+            float(np.max(np.abs(opd_noise_rad2))),1e-30,
+        )
+        if diff > 2e-9*scale:
+            raise ValueError(
+                "STRAP angular noise and Noll-OPD noise disagree: "
+                f"relative error={diff/scale:.6e}"
+            )
+    else:
+        noise_rad2 = noll_opd_noise_to_angular(
+            noise_covariance_opd_m2, diameter_m,
+        )
+        noise_source = "Noll_OPD_to_angular_boundary_fallback"
     if method == "legacy_psfr":
         gain = float(pn) if pn is not None else np.nan
         if not np.isfinite(gain) or gain < 0:
@@ -69,6 +95,7 @@ def direct_angular_tt_covariance(
             "method": method,
             "measured_centroid_covariance_rad2": measured.tolist(),
             "sensor_noise_covariance_rad2": noise_rad2.tolist(),
+            "sensor_noise_angular_source": noise_source,
             "atmosphere_covariance_rad2": atmospheric.tolist(),
             "propagated_noise_covariance_rad2": (gain*clean_noise).tolist(),
         }
@@ -85,6 +112,7 @@ def direct_angular_tt_covariance(
             "method": method,
             "measured_centroid_covariance_rad2": measured.tolist(),
             "sensor_noise_covariance_rad2": noise_rad2.tolist(),
+            "sensor_noise_angular_source": noise_source,
             "atmosphere_covariance_rad2": atmosphere.tolist(),
             "propagated_noise_covariance_rad2": noise.tolist(),
             "spectral_gain_sensor_to_physical_noise": report[
