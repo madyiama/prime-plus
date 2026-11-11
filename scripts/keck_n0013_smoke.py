@@ -605,7 +605,8 @@ def main():
             "HO modal covariance: strict (default) rejects significant negative "
             "eigenvalues; tiny_negative permits explicitly warned projection "
             "if both maximum and cumulative negative spectral fractions are "
-            "<= 0.001% (LGS/NGS); small_negative permits <= 0.5% (NGS only). "
+            "at most 0.001 percent (LGS/NGS); small_negative permits "
+            "at most 0.5 percent (NGS only). "
             "Neither policy validates the sensor-noise estimator."
         ),
     )
