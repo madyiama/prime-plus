@@ -121,7 +121,9 @@ def test_changing_noise_only_changes_legacy_residual_not_angular_otf_formula():
     physical2,_=direct_angular_tt_covariance(
         raw,c2*gain**2,D,method="legacy_psfr",pn=0.12,
     )
-    assert not np.allclose(physical1,physical2,rtol=1e-4,atol=1e-10)
+    # Angular physical covariances are in rad² (~1e-13): an atol=1e-10
+    # would silently declare any two realistic Keck jitter values equal.
+    assert not np.allclose(physical1,physical2,rtol=1e-4,atol=1e-26)
     # Both routes retain rad² image-motion covariance and physical
     # Noll-normalized angular Gaussian OTF; only noise inference changes.
     assert physical1.shape==physical2.shape==(2,2)
