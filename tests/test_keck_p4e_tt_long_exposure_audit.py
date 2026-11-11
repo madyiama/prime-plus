@@ -112,7 +112,7 @@ def test_van_dam_reestimated_for_each_gain_and_band_without_gain_fit():
             "conditional_band_limited_unverified_instrument_plant"
         )
         assert not conditional["filter_plant_and_command_absolute_scale_calibrated"]
-        assert not conditional["welch_low_frequency_leakage_not_included"] is False
+        assert conditional["welch_low_frequency_leakage_not_included"] is True
         assert conditional["frequency_interval_hz"][0]>0
 
 
