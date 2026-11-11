@@ -1,0 +1,41 @@
+# P3 Keck/NIRC2 PSF-R V1 — REPRODUCIBLE NOMINAL CONFIGURATION.
+# This TOML is the source of truth for scripts/keck_psfr_v1_e2e.py.
+# The underlying keck_n0013_smoke.py reads only tip_tilt_noise and
+# tip_tilt_jitter tables. The V1 runner validates all other fields
+# before passing them as explicit CLI arguments.
+#
+# Scientific status: numerical/operational baseline, NOT a calibrated
+# measurement of Keck STRAP optical gain, APD detector noise or TTM plant.
+
+[psfr_v1]
+science_mode = "Keck_LGS_NIRC2"
+n_layer = 7
+pupil_resampling = "physical_binary"
+pupil_rotation = "header" # KAON nominal geometry; FITS optical zero unverified
+pupil_parity = "native"
+tt_profile = "reduced_jitter" # fixed A1, no tuning on science image
+tt_kernel_convention = "noll_angular"
+tt_axis_parity = "native"
+ho_covariance_policy = "strict" # fail, not silent repair
+r0_method = "zernike" # HO POL estimator, known calibration limitations
+ncpa_enabled = false
+science_psf_fitting = false
+tt_anisokinetism = "p3_dani_tt_only"
+legacy_tt_kernel_divide_by_16 = false
+default_science_jitter_calibrated = false
+
+[tip_tilt_noise]
+method = "van_dam"
+high_frequency_band = [0.65, 0.95]
+welch_nperseg = 512
+
+[tip_tilt_jitter]
+method = "legacy_psfr"
+mirror_model = "unity"
+welch_nperseg = 512
+
+[provenance]
+policy = "P4-C A1 provisional 2020 Keck LGS; not a sky-angle gain calibration"
+alternate_spectral = "Use --tt-profile spectral_comparison in separate diagnostic"
+alternate_noise = "Use --tt-profile gendron_comparison in separate diagnostic"
+anisokinetism_injected_twice = false
