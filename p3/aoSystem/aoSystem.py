@@ -27,6 +27,28 @@ from p3.aoSystem.processing import is_auto_noise_var
 from p3.aoSystem.rtc import rtc
 import p3.aoSystem.anisoplanatismModel as anisoplanatismModel
 
+def r0_to_science_line_of_sight(r0_m, airmass, seeing_reference='zenith'):
+    """Convert a reference r0 to the actual science line of sight.
+
+    The legacy P3 input contract expects a zenith-normalized seeing/r0
+    and applies airmass**(-3/5). Keck WFS telemetry instead produces
+    an r0 that *already* samples the science line of sight. Explicitly
+    mark those INI files with SeeingReference='line_of_sight' to avoid
+    a second airmass conversion.
+    """
+    r0_m, airmass = float(r0_m), float(airmass)
+    if not (np.isfinite(r0_m) and r0_m > 0
+            and np.isfinite(airmass) and airmass >= 1):
+        raise ValueError("r0 must be positive and airmass must be >=1")
+    if seeing_reference == 'zenith':
+        return r0_m * airmass**(-3.0/5.0)
+    if seeing_reference == 'line_of_sight':
+        return r0_m
+    raise ValueError(
+        "Atmosphere SeeingReference must be 'zenith' or 'line_of_sight'"
+    )
+
+
 #%%
 class aoSystem():
 
@@ -54,6 +76,20 @@ class aoSystem():
     def get_config_value(self, primary, secondary):
         return self.my_data_map[primary][secondary]
 
+    def _atmosphere_seeing_reference(self):
+        """Legacy INIs default to zenith; Keck telemetry INIs are explicit."""
+        value = (
+            self.get_config_value('atmosphere', 'SeeingReference')
+            if self.check_config_key('atmosphere', 'SeeingReference')
+            else 'zenith'
+        )
+        if value not in ('zenith', 'line_of_sight'):
+            raise ValueError(
+                "Atmosphere SeeingReference must be 'zenith' "
+                "or 'line_of_sight'"
+            )
+        return value
+
     def _parse_config_value(self, value):
         if not isinstance(value, str):
             return value
@@ -73,8 +109,12 @@ class aoSystem():
         corrected_area_pix = rad2mas * wvl_min / (pitch_min * pix_scale)
 
         if self.check_config_key('atmosphere', 'Seeing'):
-            seeing_zenith_arcsec = float(self.get_config_value('atmosphere', 'Seeing'))
-            seeing_arcsec = seeing_zenith_arcsec * self.tel.airmass**(3.0 / 5.0)
+            seeing_ref_arcsec = float(self.get_config_value('atmosphere', 'Seeing'))
+            seeing_reference = self._atmosphere_seeing_reference()
+            seeing_arcsec = (
+                seeing_ref_arcsec * self.tel.airmass**(3.0 / 5.0)
+                if seeing_reference == 'zenith' else seeing_ref_arcsec
+            )
         else:
             seeing_arcsec = 0.976 * self.atm.wvl / self.atm.r0 * 3600 * 180 / np.pi
 
@@ -401,9 +441,26 @@ class aoSystem():
             L0 = 25
 
         if self.check_config_key('atmosphere','Cn2Weights'):
-            weights = self.get_config_value('atmosphere','Cn2Weights')
-            if np.abs(np.sum(weights) - 1) > 1e-3:
+            raw_weights = self.get_config_value('atmosphere','Cn2Weights')
+            try:
+                weights = np.asarray(raw_weights, dtype=float)
+            except (ValueError, TypeError) as exc:
+                raise ValueError(
+                    "Invalid 'Cn2Weights' in [atmosphere]: expected a list "
+                    "of finite numbers, e.g. [0.5, 0.3, 0.2]. An old "
+                    "NumPy array string may be missing commas; regenerate "
+                    "the INI with configFile.py."
+                ) from exc
+            if (weights.ndim != 1 or weights.size == 0
+                    or not np.all(np.isfinite(weights))
+                    or np.any(weights < 0)):
+                raise ValueError(
+                    "'Cn2Weights' in [atmosphere] must be a finite, "
+                    "nonnegative 1-D vector"
+                )
+            if np.abs(float(np.sum(weights)) - 1) > 1e-3:
                 raise ValueError("Sum of 'Cn2Weights' in section 'atmosphere' is not equal to 1")
+            weights = weights.tolist()
         else:
             weights = [1.0]
 
@@ -430,7 +487,12 @@ class aoSystem():
             wvlAtm, r0, L0, weights, heights, wSpeed, wDir)
 
         #----- class definition
-        self.atm = atmosphere(wvlAtm, r0*airmass**(-3.0/5.0),
+        seeing_reference = self._atmosphere_seeing_reference()
+        r0_los = r0_to_science_line_of_sight(r0, airmass, seeing_reference)
+        self.atmosphere_seeing_reference = seeing_reference
+        self.atmosphere_r0_before_airmass_m = float(r0)
+        self.atmosphere_r0_los_m = float(r0_los)
+        self.atm = atmosphere(wvlAtm, r0_los,
                               weights,
                               np.array(heights)*airmass,
                               wSpeed,

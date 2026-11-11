@@ -130,3 +130,48 @@ def test_no_anisoplanatism_returns_base_sf_only():
     model = _psfr_stub(False, 1, np.ones((1, 4, 4)) * 10)
     sf = model.phase_structure_function(0.2, [1, 1], Cn2=None)
     np.testing.assert_array_equal(sf, np.zeros((4, 4, 1)))
+
+
+def test_jitter_otf_frequency_grid_has_correct_camera_pixel_scale_at_any_wavelength():
+    """Independent angular-FFT reference checks spatial grid and lambda cancellation.
+
+    For a fixed on-sky Gaussian jitter, its OTF sampled at a fixed camera
+    plate scale cannot change merely because the reference wavelength changes.
+    Assumes psdExpansion=False (standard Keck PSF-R), kRef integer.
+    """
+    from p3.aoSystem.FourierUtils import instantiateAngularFrequencies
+
+    diameter = 10.5
+    pixel_scale_mas = 9.942
+    mas_to_rad = ARCSEC_TO_RAD / 1000.0
+    plate_scale_rad = pixel_scale_mas * mas_to_rad
+    sigma_x_rad = 24.0 * mas_to_rad
+    sigma_y_rad = 39.0 * mas_to_rad
+    angular_cov = np.diag([sigma_x_rad**2, sigma_y_rad**2])
+
+    n_pix = 128
+    for k_ref in (1, 2):
+        n_otf = n_pix * k_ref
+        u, v, *_ = instantiateAngularFrequencies(n_otf, fact=2)
+        ix, iy = np.mgrid[0:n_otf, 0:n_otf]
+        qx = ix - n_otf // 2
+        qy = iy - n_otf // 2
+
+        # Direct DFT characteristic function on the camera's pixel grid:
+        # its exponent depends only on jitter measured in camera pixels.
+        expected = np.exp(-2*np.pi**2 * (
+            (sigma_x_rad/plate_scale_rad)**2 * (qx/n_pix)**2
+            + (sigma_y_rad/plate_scale_rad)**2 * (qy/n_pix)**2
+        ))
+
+        for wavelength in (1.65e-6, 2.055501e-6, 2.35e-6):
+            # frequencyDomain standard (psdExpansion=False) definition:
+            sampling = k_ref * wavelength / (diameter * plate_scale_rad)
+            dphi = angular_jitter_structure_function(
+                angular_cov, diameter, wavelength,
+                sampling/2 * u, sampling/2 * v,
+            )
+            np.testing.assert_allclose(
+                np.exp(-0.5*dphi), expected, atol=1e-14, rtol=1e-12,
+            )
+            assert dphi[n_otf//2, n_otf//2] == pytest.approx(0.0)

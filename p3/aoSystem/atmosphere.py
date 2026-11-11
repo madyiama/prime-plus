@@ -42,7 +42,17 @@ class atmosphere:
         return self.p_wvl
 
     def set_wvl(self,val):
-        self.r0 = self.r0*(val/self.wvl)**1.2
+        val = float(val)
+        if not np.isfinite(val) or val <= 0:
+            raise ValueError("Atmosphere wavelength must be finite and positive")
+        factor = (val / self.p_wvl)**1.2
+        self.r0 *= factor
+        # Layer r0 values were defined at the previous atmospheric wavelength.
+        # Keep atm.slab() consistent with the global r0 when fourierModel
+        # switches from 500 nm to the science reference wavelength.
+        if hasattr(self, "layer"):
+            for atm_layer in np.atleast_1d(self.layer):
+                atm_layer.r0 *= factor
         self.p_wvl = val
     wvl = property(get_wvl, set_wvl)
 

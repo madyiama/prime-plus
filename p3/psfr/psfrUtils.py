@@ -104,7 +104,8 @@ def mkotf_indpts(nU1d,nPh,u1D,loc,dp):
 
     return indptsc,indptsc2
 
-def modes2Otf(Cmm, modes, pupil, n_otf, samp=2, basis='Vii'):
+def modes2Otf(Cmm, modes, pupil, n_otf, samp=2, basis='Vii',
+              covariance_psd_policy='strict', covariance_diagnostics=None):
     """
     Computes the OTF and phase structure function from the covariance matrix
     of given coeffcients and the corresponding modal basis.
@@ -132,10 +133,93 @@ def modes2Otf(Cmm, modes, pupil, n_otf, samp=2, basis='Vii'):
     den[msk] = 1/G[msk]
 
     if np.any(Cmm) and basis=="Vii":
-        # Diagonalizing the Cvv matrix
-        U, ss ,V = np.linalg.svd(Cmm)
+        # Cmm is a covariance, not an arbitrary matrix. Using SVD singular
+        # values would silently turn a negative eigenvalue into positive
+        # variance; Vh would also apply eigenvectors in the wrong direction.
+        covariance = np.asarray(Cmm, dtype=float)
+        if covariance.shape != (modes.shape[1], modes.shape[1]):
+            raise ValueError("Modal covariance and influence modes have incompatible shapes")
+        if not np.isfinite(covariance).all():
+            raise ValueError("Modal covariance contains non-finite values")
+        scale = max(float(np.max(np.abs(covariance))), 1e-30)
+        if np.max(np.abs(covariance-covariance.T)) > 1e-10*scale:
+            raise ValueError("Modal covariance must be symmetric")
+        eigenvalues, eigenvectors = np.linalg.eigh(
+            0.5*(covariance+covariance.T)
+        )
+        # 'strict' rejects any negative beyond numerical eigensolver tolerance.
+        # 'tiny_negative' is an explicit, tightly bounded option for LGS/NGS
+        # finite-sample HO covariance estimates; it is not machine roundoff.
+        # 'small_negative' retains the prior wider exploratory NGS-only option.
+        # Check both the worst eigenvalue and accumulated negative mass.
+        if covariance_psd_policy not in (
+            'strict', 'tiny_negative', 'small_negative'
+        ):
+            raise ValueError("Unknown modal covariance PSD policy")
+        tolerance = max(1e-12*float(np.max(np.abs(eigenvalues))), 1e-24)
+        negative_values = -eigenvalues[eigenvalues < -tolerance]
+        negative_mass = float(np.sum(negative_values))
+        positive_mass = float(np.sum(eigenvalues[eigenvalues > 0]))
+        negative_mode_fraction = (
+            float(np.max(negative_values)) / max(float(np.max(eigenvalues)), 1e-30)
+            if negative_values.size else 0.0
+        )
+        negative_trace_fraction = negative_mass / max(positive_mass, 1e-30)
+        # Explicit engineering limits, NOT statistically validated confidence
+        # intervals. 1e-5 (0.001%) is deliberately much tighter than the
+        # NGS-only 0.005 (0.5%) exploratory policy.
+        projection_limits = {
+            'strict': 0.0,
+            'tiny_negative': 1e-5,
+            'small_negative': 5e-3,
+        }
+        projection_limit = projection_limits[covariance_psd_policy]
+        can_regularize = (
+            covariance_psd_policy != 'strict'
+            and negative_mode_fraction <= projection_limit
+            and negative_trace_fraction <= projection_limit
+        )
+        if covariance_diagnostics is not None:
+            covariance_diagnostics.update({
+                'policy': covariance_psd_policy,
+                'lambda_min': float(np.min(eigenvalues)),
+                'lambda_max': float(np.max(eigenvalues)),
+                'negative_mode_count': int(negative_values.size),
+                'negative_eigenvalue_mass': negative_mass,
+                'negative_mode_fraction_of_lambda_max': negative_mode_fraction,
+                'negative_trace_fraction_of_positive_mass': negative_trace_fraction,
+                'maximum_allowed_fraction': projection_limit,
+                'projection_applied': bool(can_regularize and negative_values.size),
+                'units': 'input covariance units',
+                'model_validated_by_projection': False,
+            })
+        if negative_values.size and not can_regularize:
+            raise ValueError(
+                "Modal covariance is not positive-semidefinite: "
+                f"lambda_min={np.min(eigenvalues):.6e}, "
+                f"lambda_max={np.max(eigenvalues):.6e}, "
+                f"tolerance={tolerance:.6e}, "
+                f"negative_mode_fraction={negative_mode_fraction:.6g}, "
+                f"negative_trace_fraction={negative_trace_fraction:.6g}. "
+                "Review HO noise subtraction; explicit optional policies "
+                "are tiny_negative (0.001% each, LGS/NGS) and "
+                "small_negative (0.5% each, NGS-only)."
+            )
+        if can_regularize and negative_values.size:
+            import warnings
+            warnings.warn(
+                "HO covariance estimated from telemetry has small negative "
+                f"eigenvalues: clipped {negative_values.size} modes, "
+                f"negative_trace_fraction={negative_trace_fraction:.4g}, "
+                f"worst_relative_eigenvalue={negative_mode_fraction:.4g}, "
+                f"policy={covariance_psd_policy}, cap={projection_limit:.4g}; "
+                "explicit PSD regularization, NOT instrument validation.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        ss = np.clip(eigenvalues, 0, None)
         nModes = len(ss)
-        M_all = np.dot(modes, V)
+        M_all = np.dot(modes, eigenvectors)
         M_all = M_all.reshape(n_pup, n_pup, nModes)
         M_all = FourierUtils.enlargeSupport(M_all, samp)*pup_pad[:, :, np.newaxis]
 
@@ -172,9 +256,11 @@ def modes2Otf(Cmm, modes, pupil, n_otf, samp=2, basis='Vii'):
                 dphi = fft.fftshift(2*dphi)*den*msk
         otf = G*np.exp(-0.5*dphi)
     else:
-        #Diffraction-limit case
+        # Diffraction-limited case: a zero modal covariance must return
+        # exactly zero phase structure function (without undefined locals).
         G = G/G.max()
         otf = G
+        dphi = np.zeros_like(G)
 
     # Interpolation of the OTF => determination of the PSF fov
     otf = otf*(G>1e-5) #3.6 ms

@@ -61,23 +61,50 @@ def _clip_layer_variance(var_sensed: np.ndarray, x: np.ndarray) -> np.ndarray:
     var = np.clip(var_sensed, 0, _FULL_LAYER_VARIANCE)
     return np.where(x >= 1, _FULL_LAYER_VARIANCE, var)
 
-def focal_anisoplanatism_wfe(tel, atm, lgs):
-    """
-        Computes the wavefront error of the focal anisoplanatism due to the finite altitude
-        of the LGS in SLAO mode by using Parenti and Sassiela+04
-        INPUTS:
-            - tel, atm and lgs objects
-            - method : Sasiela or Tyler (this latter not validated yet)
-        OUTPUTS
-            - wfe, the focal anisoplanatism error in nm
-    """
+def focal_anisoplanatism_phase_variance(tel, atm, lgs):
+    """Kolmogorov cone-effect piston-AND-tilt-removed variance [rad^2].
 
+    Hardy (1998), eq. 16, as reproduced by Beltramo-Martin et al.
+    (2019, MNRAS 487, 5450), eq. 12:
+
+      sigma_phi^2 = (D/r0)^(5/3) sum_l w_l *
+          [0.5 (h_l/H)^(5/3) - 0.452 (h_l/H)^2] / 0.423.
+
+    The published 0.452 term corresponds to removal of both global
+    piston and x/y wavefront tilt on an ideal circular pupil (Hardy;
+    Sasiela, Electromagnetic Wave Propagation in Turbulence, Eq 6.197).
+    It must NOT be directly equated to the legacy Flicker SF/OTF
+    integration which removes piston but still contains cone tip-tilt.
+
+    Here r0 is defined for the same line of sight and wavelength as atm,
+    the weights are fractions of integrated Cn2 dh, h/H is along the same
+    geometrical line of sight, and 0.423 comes from Fried's r0 definition.
+
+    The finite-beacon clipping and the full-layer cap are *modeling
+    approximations*. This Kolmogorov variance does NOT model finite L0,
+    a filtered DM, or the diffraction-weighted OTF-equivalent WFE.
+    """
     x = _height_ratio(atm, lgs)
-    var = np.sum(np.asarray(FourierUtils.cpuArray(atm.weights)) * _clip_layer_variance(
-        (0.5*x**(5/3) - 0.452*x**2)/0.423, x))
-    wfe = np.sqrt(var * (tel.D/atm.r0)**(5/3)) * (atm.wvl*1e9/2/np.pi)
+    weights = np.asarray(FourierUtils.cpuArray(atm.weights), dtype=float).reshape(-1)
+    if (x.shape != weights.shape or not np.all(np.isfinite(weights))
+            or np.any(weights < 0)
+            or not np.isclose(weights.sum(), 1.0, atol=1e-6, rtol=0)):
+        raise ValueError("Invalid normalized layer weights for focal anisoplanatism")
+    kernel = (0.5 * x**(5.0/3.0) - 0.452 * x**2) / 0.423
+    variance_normalized = np.sum(weights * _clip_layer_variance(kernel, x))
+    return float(variance_normalized * (tel.D/atm.r0)**(5.0/3.0))
 
-    return wfe
+
+def focal_anisoplanatism_wfe(tel, atm, lgs):
+    """Analytical Kolmogorov cone-effect wavefront RMS [nm OPD].
+
+    See focal_anisoplanatism_phase_variance for the reference formula
+    and assumptions. Not interchangeable with the OTF-derived Maréchal
+    equivalent error from psfR.get_error_breakdown().
+    """
+    phase_variance = focal_anisoplanatism_phase_variance(tel, atm, lgs)
+    return np.sqrt(phase_variance) * (atm.wvl*1e9/(2*np.pi))
+
 
 def anisokinetism_wfe(tel, atm, src, ngs, method="Sasiela"):
     """
@@ -124,20 +151,16 @@ def anisokinetism_wfe(tel, atm, src, ngs, method="Sasiela"):
     else:
         raise ValueError("The method " + method + "is not supported." )
 
-def focal_anisoplanatism_variance(tel,atm,lgs):
-    '''
-        Compute the variance of the focal anisoplanatism due to the finite altitude of the LGS in SLAO mode
-        INPUTS:
-            - tel, atm and lgs objects
-        OUTPUTS
-            - wfe, the focal anisoplanatism error in nm
-    '''
-    
-    x = _height_ratio(atm, lgs)
-    var = np.sum(np.asarray(FourierUtils.cpuArray(atm.weights)) * _clip_layer_variance(
-        0.5*x**(5/3) - 0.425*x**2, x))
-    wfe = np.sqrt(var * (tel.D/atm.r0)**(5/3)) * (atm.wvl*1e9/2/np.pi)
-    return wfe
+def focal_anisoplanatism_variance(tel, atm, lgs):
+    """Legacy misnamed alias, returns WFE in nm (NOT a variance).
+
+    Previously used an inconsistent 0.425 coefficient and lacked /0.423
+    despite returning the same quantity as focal_anisoplanatism_wfe.
+    Prefer focal_anisoplanatism_phase_variance for phase variance [rad^2]
+    or focal_anisoplanatism_wfe for RMS OPD [nm].
+    """
+    return focal_anisoplanatism_wfe(tel, atm, lgs)
+
 
 #%% PHASE STRUCTURE FUNCTION
 def anisoplanatism_structure_function(tel, atm, src, lgs, ngs,
@@ -253,7 +276,10 @@ def angular_function(tel, atm, src, gs, nOtf, samp, method="Fourier", msk_in=1, 
 
     return Dani_l
 
-def focal_angular_function(tel, atm, src, gs, nActu, nOtf, samp, h_filt=1):
+def focal_angular_function(
+    tel, atm, src, gs, nActu, nOtf, samp, h_filt=1,
+    *, pupil_grid_mode='legacy', output_grid='otf',
+):
     """
     Returns the nActu**2 x nActu**2 point wise phase structure function
     for the focal-angular anisoplanatism  by following Flicker's 2008 report.
@@ -265,8 +291,25 @@ def focal_angular_function(tel, atm, src, gs, nActu, nOtf, samp, h_filt=1):
 
 
     #1\ Grabbing inputs
+    # Defaults preserve the production algorithm exactly. Two opt-in
+    # audit-only choices expose the raw per-baseline SF and sample
+    # actual physical telescope-pupil coordinates. Neither changes
+    # matrix_to_map's square-grid, unmasked pair averaging.
+    if pupil_grid_mode not in ('legacy', 'physical_diameter'):
+        raise ValueError("Unknown focal pupil_grid_mode: " + str(pupil_grid_mode))
+    if output_grid not in ('otf', 'native'):
+        raise ValueError("Unknown focal output_grid: " + str(output_grid))
     umax = tel.D/2 * max([1,samp])/2
-    f0 = 2*np.pi/atm.L0
+    # The exact Kolmogorov limit must be evaluated analytically, NOT by
+    # setting L0 to an enormous finite value: the McDonald covariance
+    # terms individually approach 3/5 and their alternating sum loses
+    # precision after multiplication by L0**(5/3).
+    outer_scale = float(atm.L0)
+    if not (outer_scale > 0 or np.isposinf(outer_scale)):
+        raise ValueError("Outer scale must be positive or +infinity")
+    kolmogorov_limit = bool(np.isposinf(outer_scale))
+    if not kolmogorov_limit:
+        f0 = 2*np.pi/outer_scale
     dist = [ src.direction[0] - gs.direction[0],
               src.direction[1] - gs.direction[1]]
 
@@ -285,7 +328,6 @@ def focal_angular_function(tel, atm, src, gs, nActu, nOtf, samp, h_filt=1):
         return X, Y, rho_x, rho_y
 
     #2\ SF Calculation
-    Dani_l = np.zeros((src.nSrc, atm.nL, nOtf, nOtf))
     # SLAO uses one deformable mirror; nActu1D can be a one-element
     # NumPy array even though the geometrical calculation needs a scalar.
     n_actu_values = np.asarray(nActu)
@@ -296,14 +338,32 @@ def focal_angular_function(tel, atm, src, gs, nActu, nOtf, samp, h_filt=1):
         raise ValueError("DM actuator count must be a positive integer")
     n_ph = 2 * int(n_actu) + 1
 
-    # Angular frequencies
-    X1, Y1, rhoX, rhoY = vector_to_separation(umax/n_ph * (np.array(range(n_ph)) - n_ph//2))
-    _, _, sep_x, sep_y = vector_to_separation(np.array(range(n_ph)))
+    # All coordinates below are physical metres in the telescope pupil.
+    # Legacy grid is preserved bit-for-bit for default reconstructions.
+    # The physical alternative spans [-D/2, D/2] on each pupil axis.
+    if pupil_grid_mode == 'legacy':
+        u = umax/n_ph * (np.arange(n_ph) - n_ph//2)
+    else:
+        u = np.linspace(-tel.D/2, tel.D/2, n_ph)
+    X1, Y1, rhoX, rhoY = vector_to_separation(u)
+    _, _, sep_x, sep_y = vector_to_separation(np.arange(n_ph))
+    grid_size = (2*n_ph - 1) if output_grid == 'native' else nOtf
+    Dani_l = np.zeros((src.nSrc, atm.nL, grid_size, grid_size))
 
     # Instantiation
-    I0 = 3.0/5.0
-    I1 = FourierUtils.Ialpha(f0*rhoX, f0*rhoY)
-    cte = 0.12184*0.06*(2*np.pi)**2 * atm.L0**(5/3)
+    if kolmogorov_limit:
+        # Ialpha(z) = 3/5 - a*z**(5/3) + higher-order terms,
+        # a = -Gamma(-5/6)/(2**(8/3)*Gamma(11/6)).
+        # Thus L0**(5/3)*(Ialpha(0)-Ialpha(2*pi*r/L0))
+        # tends exactly to a*(2*pi*r)**(5/3).
+        nu = 5.0/6.0
+        a = (-spc.gamma(-nu)
+             / (2.0**(2.0*nu+1.0)*spc.gamma(1.0+nu)))
+        cte = 0.12184*0.06*(2*np.pi)**(2.0+5.0/3.0)*a
+    else:
+        I0 = 3.0/5.0
+        I1 = FourierUtils.Ialpha(f0*rhoX, f0*rhoY)
+        cte = 0.12184*0.06*(2*np.pi)**2 * outer_scale**(5.0/3.0)
 
     # Anisoplanatism Structure Function
     for iSrc in range(src.nSrc):
@@ -312,17 +372,36 @@ def focal_angular_function(tel, atm, src, gs, nActu, nOtf, samp, h_filt=1):
         for l, zl in enumerate(atm.heights):
             if zl:
                 g = zl/gs.height
-                I2 = FourierUtils.Ialpha(f0*(rhoX*(1-g)),
-                                         f0*(rhoY*(1-g)))
-                I3 = FourierUtils.Ialpha(f0*(rhoX - g*X1 + zl*thx),
-                                         f0*(rhoY - g*Y1 + zl*thy))
-                I4 = FourierUtils.Ialpha(f0*(g*X1 - zl*thx),
-                                         f0*(g*Y1 - zl*thy))
-                I5 = FourierUtils.Ialpha(f0*(g*(rhoX-X1) - zl*thx),
-                                         f0*(g*(rhoY-Y1) - zl*thy))
-                I6 = FourierUtils.Ialpha(f0*((1-g)*rhoX + g*X1 - zl*thx),
-                                         f0*((1-g)*rhoY + g*Y1 - zl*thy))
-                tmp = 2*I0 - I1 - I2 + I3 - I4 - I5 + I6
+                if kolmogorov_limit:
+                    # Exact L0 -> infinity limit of the same six-term
+                    # Flicker covariance, preserving its spatial dependence
+                    # on both pupil coordinates and point-pair baseline.
+                    p = lambda x, y: np.hypot(x, y)**(5.0/3.0)
+                    tmp = (
+                        p(rhoX, rhoY)
+                        + p((1-g)*rhoX, (1-g)*rhoY)
+                        - p(rhoX - g*X1 + zl*thx,
+                            rhoY - g*Y1 + zl*thy)
+                        + p(g*X1 - zl*thx, g*Y1 - zl*thy)
+                        + p(g*(rhoX-X1) - zl*thx,
+                            g*(rhoY-Y1) - zl*thy)
+                        - p((1-g)*rhoX + g*X1 - zl*thx,
+                            (1-g)*rhoY + g*Y1 - zl*thy)
+                    )
+                else:
+                    I2 = FourierUtils.Ialpha(f0*(rhoX*(1-g)),
+                                             f0*(rhoY*(1-g)))
+                    I3 = FourierUtils.Ialpha(f0*(rhoX - g*X1 + zl*thx),
+                                             f0*(rhoY - g*Y1 + zl*thy))
+                    I4 = FourierUtils.Ialpha(f0*(g*X1 - zl*thx),
+                                             f0*(g*Y1 - zl*thy))
+                    I5 = FourierUtils.Ialpha(f0*(g*(rhoX-X1) - zl*thx),
+                                             f0*(g*(rhoY-Y1) - zl*thy))
+                    I6 = FourierUtils.Ialpha(
+                        f0*((1-g)*rhoX + g*X1 - zl*thx),
+                        f0*((1-g)*rhoY + g*Y1 - zl*thy)
+                    )
+                    tmp = 2*I0 - I1 - I2 + I3 - I4 - I5 + I6
                 if not np.isscalar(h_filt):
                     tmp = np.dot(h_filt, np.dot(tmp, h_filt_t))
 
@@ -330,7 +409,12 @@ def focal_angular_function(tel, atm, src, gs, nActu, nOtf, samp, h_filt=1):
                 cmap = FourierUtils.matrix_to_map(tmp, sep_x=sep_x, sep_y=sep_y)
 
                 # ---- interpolation
-                Dani_l[iSrc, l] = FourierUtils.interpolateSupport(cmap, nOtf)
+                # Native output exposes the physical covariance-lag axis
+                # to audit scripts. Production still does the original zoom.
+                Dani_l[iSrc, l] = (
+                    cmap if output_grid == 'native'
+                    else FourierUtils.interpolateSupport(cmap, nOtf)
+                )
 
     return cte*Dani_l
 
@@ -351,8 +435,11 @@ def anisokinetism_function(tel, atm, src, gs, nOtf, samp):
     Y = zern.modes[1]/2
     X2 = X**2
     Y2 = Y**2
-    XY = X*Y.T
-    YX = Y*X.T
+    # Off-diagonal covariance is the local 2-D quadratic cross term XY.
+    # Transposing either coordinate changes XY into an incorrect square
+    # on the usual Cartesian Zernike grid.
+    XY = X*Y
+    YX = Y*X
 
     # instantiating the phase structure function
     Dani_l = np.zeros((nSrc, atm.nL, nOtf, nOtf))

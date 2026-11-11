@@ -182,7 +182,12 @@ class telemetryKeck:
         # 2\ Restore the telescope configuration
         self.tel.name  = hdr['TELESCOP'].replace(' ','')
         self.tel.zenith_angle, self.tel.airmass = keckUtils.getTelescopeAirmass(hdr)
-        self.tel.pupilAngle = keckUtils.getPA(hdr)
+        # NIRC2 sky PA must not rotate the physical telescope pupil.
+        # KAON 1160 supplies the NIRC2/WFS angle conventions separately.
+        self.tel.pupil_orientation = keckUtils.getPupilAngles(hdr)
+        self.tel.pupilAngle = self.tel.pupil_orientation['nirc2_pupil_angle_deg']
+        self.tel.skyPositionAngle = self.tel.pupil_orientation['sky_position_angle_deg']
+        self.tel.wfsPupilAngle = self.tel.pupil_orientation['wfs_pupil_angle_deg']
         self.tel.pupilMaskName = keckUtils.getPupilMask(hdr)
         _,self.aoMode = keckUtils.getStagePositionWFS(hdr)
 
@@ -220,8 +225,11 @@ class telemetryKeck:
 
             # wavelengths and transmission
             self.path_filter = self.path_calib + '/NIRC2_FILTERS/'
-            self.cam.wvl, self.cam.bw, self.cam.transmission, self.cam.dispersion =\
-            keckUtils.samplingFilterProfile(self.path_filter, hdr)
+            (self.cam.wvl, self.cam.bw, self.cam.transmission,
+             self.cam.dispersion, self.cam.filter_profile_diagnostics) = \
+                keckUtils.samplingFilterProfile(
+                    self.path_filter, hdr, return_metadata=True
+                )
 
             # exposure configuration
             self.cam.ittime,self.cam.coadds,self.cam.sampmode,self.cam.nreads,self.cam.ron,self.cam.gain =\
@@ -267,19 +275,17 @@ class telemetryKeck:
             self.mat.Hdm = np.matmul(self.mat.dmIF,self.mat.dmIF_inv)
 
         #3\ MASS/DIMM
-        # managing the saving folder
-        if not os.path.isdir(self.path_calib+'/MASSDIMM/'):
-            os.mkdir(self.path_calib+'/MASSDIMM/')
-        self.path_massdimm = self.path_calib+'/MASSDIMM/'+self.obsdate +'/'
+        # Provenance matters: external site monitoring is not interchangeable
+        # with the fitted on-axis WFS r0; the latter is updated by
+        # systemDiagnosis after this instrument-data loading stage.
+        if not 1 <= int(nLayer) <= 7:
+            raise ValueError("Keck MASS/DIMM layer count must be within [1, 7]")
+        mass_root = self.path_calib + '/MASSDIMM/'
+        os.makedirs(mass_root, exist_ok=True)
+        self.path_massdimm = mass_root + self.obsdate + '/'
         if not os.path.isdir(self.path_massdimm):
-            status = fetch_data(self.obsdate,self.path_massdimm)
-        else:
-            if not os.path.isfile(self.path_massdimm + '/' + self.obsdate+'.dimm.dat'):
-                status = 0
-            else:
-                status = 1
+            fetch_data(self.obsdate, self.path_massdimm)
 
-        # median conditions at MaunaKea
         self.atm.wvl = 500e-9
         self.atm.wSpeed = [6.8, 6.9, 7.1, 7.5, 10.0, 26.9, 18.5]
         self.atm.wDir = list(np.zeros(len(self.atm.wSpeed)))
@@ -289,55 +295,124 @@ class telemetryKeck:
         self.atm.Cn2 = [-1]*7
         self.atm.seeing_dimm = -1
         self.atm.seeing_mass = -1
+        default_weights = [0.517, 0.119, 0.063, 0.061, 0.105, 0.081, 0.054]
+        self.atm.Cn2Weights = default_weights.copy()
+        self.atm.seeing = 0.976 * (180*3600/np.pi) * 500e-9 / 0.16
 
+        profile = {
+            'source_directory': self.path_massdimm,
+            'reference_wavelength_m': 500e-9,
+            'dimm_source': 'median_fallback',
+            'mass_source': 'median_fallback',
+            'dimm_age_minutes': None,
+            'mass_age_minutes': None,
+            'mass_profile_age_minutes': None,
+            'dimm_seeing_arcsec': None,
+            'mass_seeing_arcsec': None,
+            'dimm_timing_quality_required_minutes': 60.0,
+            'quality_warnings': [],
+            'requested_reconstruction_layers': int(nLayer),
+            'original_layer_altitudes_m': list(self.atm.Cn2Heights),
+        }
 
-        if status==0:
-            # default atmosphere : median conditions
-            self.atm.seeing = 3600*180/np.pi * 0.98*500e-9/0.16
-            self.atm.Cn2Weights = [0.517, 0.119, 0.063, 0.061, 0.105, 0.081, 0.054]
+        def observation_utc_fractional_hours(acqtime):
+            fields = acqtime.split('_')
+            return float(fields[0]) + float(fields[1])/60 + float(fields[2])/3600
+
+        hhmmss = observation_utc_fractional_hours(self.acqtime)
+        dimm_path = os.path.join(self.path_massdimm, self.obsdate + '.dimm.dat')
+        mass_path = os.path.join(self.path_massdimm, self.obsdate + '.mass.dat')
+        massprof_path = os.path.join(self.path_massdimm, self.obsdate + '.masspro.dat')
+
+        if os.path.isfile(dimm_path):
+            try:
+                dimm = DIMM(dimm_path)
+                value, offset = dimm.indexTime([hhmmss])
+                dimm_seeing = float(np.asarray(value).reshape(-1)[0])
+                profile['dimm_age_minutes'] = float(np.asarray(offset).reshape(-1)[0] * 60)
+                if np.isfinite(dimm_seeing) and dimm_seeing > 0:
+                    self.atm.seeing = dimm_seeing
+                    self.atm.seeing_dimm = dimm_seeing
+                    profile['dimm_seeing_arcsec'] = dimm_seeing
+                    profile['dimm_source'] = 'measured_dimm'
+                else:
+                    profile['quality_warnings'].append('DIMM sample absent or older than 60 minutes')
+            except (OSError, ValueError, IndexError) as exc:
+                profile['quality_warnings'].append(f'DIMM cannot be parsed: {exc}')
         else:
-            def AcqTime2hhmmss(acqtime):
-                StrTime = (acqtime.split('_'))
-                return float(StrTime[0]) + float(StrTime[1])/60 + float(StrTime[2])/3600
+            profile['quality_warnings'].append('DIMM file unavailable; using median seeing')
 
-            hhmmss = AcqTime2hhmmss(self.acqtime)
-            # read the DIMM data to get the seeing
-            dimm = DIMM(self.path_massdimm + '/' + self.obsdate + '.dimm.dat')
-            self.atm.seeing  = dimm.indexTime([hhmmss])[0][0]
+        # A free-atmosphere profile is combined only with a valid DIMM total
+        # seeing; otherwise its near-ground integral is not constrained.
+        if self.atm.seeing_dimm > 0 and os.path.isfile(massprof_path):
+            try:
+                massprof = MASSPROF(massprof_path)
+                cn2_alt, offset_prof = massprof.indexTime([hhmmss])
+                Cn2Alt = np.asarray(cn2_alt, dtype=float).reshape(-1)
+                profile['mass_profile_age_minutes'] = float(
+                    np.asarray(offset_prof).reshape(-1)[0] * 60
+                )
+                if (Cn2Alt.size != 6 or np.any(~np.isfinite(Cn2Alt))
+                        or np.any(Cn2Alt < 0)):
+                    raise ValueError('invalid or stale six-layer MASS Cn2 profile')
 
-            # read the MASS data to get the Cn2 profile
-            mass = MASS(self.path_massdimm + '/' + self.obsdate + '.mass.dat')
-            SeeingAlt = mass.indexTime([hhmmss])[0][0]
-            massprof = MASSPROF(self.path_massdimm + '/' + self.obsdate + '.masspro.dat')
-            Cn2Alt = massprof.indexTime([hhmmss])[0].reshape(-1)
-            if np.all(Cn2Alt == -1) or len(np.nonzero(Cn2Alt != Cn2Alt)[0]):
-                self.atm.seeing = 3600*180/np.pi * 0.98*500e-9/0.16
-                self.atm.Cn2Weights = [0.517, 0.119, 0.063, 0.061, 0.105, 0.081, 0.054]
-            else:
-                if SeeingAlt == -1:
+                SeeingAlt = -1.0
+                if os.path.isfile(mass_path):
+                    mass = MASS(mass_path)
+                    seeing_alt, offset_mass = mass.indexTime([hhmmss])
+                    SeeingAlt = float(np.asarray(seeing_alt).reshape(-1)[0])
+                    profile['mass_age_minutes'] = float(
+                        np.asarray(offset_mass).reshape(-1)[0] * 60
+                    )
+                if not np.isfinite(SeeingAlt) or SeeingAlt <= 0:
+                    # Infer the free atmosphere seeing from MASS Cn2 integral
+                    # only when its six-layer data passed timing/positivity QC.
                     rad2arc = 3600*180/np.pi
-                    mu = (0.976*rad2arc)**(5/3)*0.423*4*np.pi*np.pi/self.atm.wvl**(1/3)
-                    SeeingAlt = (mu * np.sum(Cn2Alt)) ** (3/5)
-                # combine MASS and DIMM data
-                self.atm.Cn2 = CombineMASSandDIMM(self.atm.seeing,SeeingAlt,Cn2Alt,wvl=self.atm.wvl)
-                self.atm.Cn2Weights = list(self.atm.Cn2/self.atm.Cn2.sum())
+                    mu = ((0.976*rad2arc)**(5/3) * 0.423 * (2*np.pi)**2
+                          / self.atm.wvl**(1/3))
+                    SeeingAlt = float((mu * np.sum(Cn2Alt)) ** (3/5))
+                    profile['mass_source'] = 'mass_profile_integral'
+                else:
+                    profile['mass_source'] = 'measured_mass_and_mass_profile'
 
-                # copying MASS/DIM data
+                cn2_integrals = CombineMASSandDIMM(
+                    self.atm.seeing, SeeingAlt, Cn2Alt, wvl=self.atm.wvl
+                )
+                if not np.isfinite(np.sum(cn2_integrals)) or np.sum(cn2_integrals) <= 0:
+                    raise ValueError('MASS-DIMM integrated Cn2 sum is nonpositive')
+                self.atm.Cn2 = cn2_integrals
+                self.atm.Cn2Weights = list(cn2_integrals / cn2_integrals.sum())
                 self.atm.Cn2_mass = np.copy(self.atm.Cn2Weights)
-                self.atm.seeing_dimm = np.copy(self.atm.seeing)
-                self.atm.seeing_mass = np.copy(SeeingAlt)
+                self.atm.seeing_mass = SeeingAlt
+                profile['mass_seeing_arcsec'] = SeeingAlt
+            except (OSError, ValueError, IndexError, FloatingPointError) as exc:
+                profile['quality_warnings'].append(
+                    f'MASS profile unusable, fallback to median vertical weights: {exc}'
+                )
+        else:
+            profile['quality_warnings'].append(
+                'MASS profile missing or valid DIMM seeing unavailable; '
+                'using median vertical weights'
+            )
 
-        # compressing
+        # Keep the complete profile for audits even when the model requests
+        # fewer equivalent atmospheric layers. The height-distribution error
+        # matters in LGS cone effect and anisoplanatism.
+        self.atm.Cn2Weights_full = list(self.atm.Cn2Weights)
+        self.atm.Cn2Heights_full = list(self.atm.Cn2Heights)
+        self.atm.massdimm_diagnostics = profile
         if nLayer < len(self.atm.Cn2Heights):
-            self.atm.wSpeed = list(FourierUtils.eqLayers(np.array(self.atm.Cn2Weights),
-                                                         np.array(self.atm.wSpeed),
-                                                         nLayer)[1])
-            self.atm.wDir = list(FourierUtils.eqLayers(np.array(self.atm.Cn2Weights),
-                                                       np.array(self.atm.wDir),
-                                                       nLayer,power=1)[1])
-            self.atm.Cn2Weights, self.atm.Cn2Heights = FourierUtils.eqLayers(self.atm.Cn2Weights,
-                                                                            np.array(self.atm.Cn2Heights),
-                                                                            nLayer)
+            self.atm.wSpeed = list(FourierUtils.eqLayers(
+                np.array(self.atm.Cn2Weights),
+                np.array(self.atm.wSpeed), nLayer
+            )[1])
+            self.atm.wDir = list(FourierUtils.eqLayers(
+                np.array(self.atm.Cn2Weights),
+                np.array(self.atm.wDir), nLayer, power=1
+            )[1])
+            self.atm.Cn2Weights, self.atm.Cn2Heights = FourierUtils.eqLayers(
+                self.atm.Cn2Weights, np.array(self.atm.Cn2Heights), nLayer
+            )
 
     def restoringTelemetry(self, decimation=1, verbose=False):
 

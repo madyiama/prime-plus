@@ -46,6 +46,86 @@ def _tt_latency_response(freq_hz, sample_rate_hz, delay_frames):
     )
 
 
+def _positive_fft_frequency_grid(sample_rate_hz, n_samples):
+    """Positive real-FFT frequencies [Hz], excluding DC; avoid double scaling."""
+    if not np.isfinite(sample_rate_hz) or sample_rate_hz <= 0:
+        raise ValueError("Invalid loop sample rate")
+    if not isinstance(n_samples, (int, np.integer)) or n_samples < 4:
+        raise ValueError("Loop must have at least four samples")
+    return np.fft.rfftfreq(n_samples, d=1.0 / sample_rate_hz)[1:]
+
+
+def autocorrelation_noise_covariance(samples, nshift=1, *, periodic=False):
+    """Difference-based lag noise proxy, with explicit record boundaries.
+
+    For white sample noise, E[0.5*(y[t+n]-y[t])^2] = C_n.
+    This proxy is NOT an independent calibrated sensor-noise estimate
+    in a closed-loop command stream: correlated motion also contributes.
+
+    periodic=True reproduces historical np.roll, which introduces a
+    nonphysical final-to-first sample jump in finite Keck telemetry.
+    """
+    values = np.asarray(samples, dtype=float)
+    if values.ndim != 2 or not np.isfinite(values).all():
+        raise ValueError("Autocorrelation noise data must be finite 2-D samples")
+    if not isinstance(nshift, (int, np.integer)) or not 0 < nshift < len(values):
+        raise ValueError("Autocorrelation lag must be between 1 and N-1")
+    if periodic:
+        delta = values - np.roll(values, -nshift, axis=0)
+    else:
+        delta = values[nshift:] - values[:-nshift]
+    return 0.5 * (delta.T @ delta) / len(delta)
+
+
+def interpolate_forward_residual_no_wrap(residual, delay_frames):
+    """Interpolate r(t + delay) on the *time* axis, without circular wrapping.
+
+    The caller's historical P3 convention uses future residual samples
+    relative to DM commands (negative roll). Keep that convention explicitly
+    until the RTC timing signs are independently verified. A time sample is
+    valid only if all interpolation neighbours belong to this observation.
+
+    Returns a full-size aligned array and a boolean mask of usable frames.
+    This is a temporal operation: the actuator column order is invariant.
+    """
+    values = np.asarray(residual, dtype=float)
+    delay = float(delay_frames)
+    if values.ndim != 2 or not np.all(np.isfinite(values)):
+        raise ValueError("Pseudo-open-loop residual must be a finite 2-D array")
+    if not np.isfinite(delay) or delay < 0:
+        raise ValueError("Pseudo-open-loop delay must be finite and non-negative")
+    n_frames = values.shape[0]
+    lo = int(np.floor(delay))
+    alpha = delay - lo
+    # Treat exact integers as one timestamp, avoiding an unnecessary
+    # additional invalid frame at the far end.
+    if np.isclose(alpha, 0.0, atol=1e-12, rtol=0.0):
+        alpha = 0.0
+    index = np.arange(n_frames, dtype=np.int64) + lo
+    end_index = index + (1 if alpha else 0)
+    valid = (index >= 0) & (end_index < n_frames)
+    if np.count_nonzero(valid) < 2:
+        raise ValueError(
+            f"Only {np.count_nonzero(valid)} pseudo-open-loop frames remain "
+            f"with delay={delay:g} over {n_frames} samples"
+        )
+    aligned = np.zeros_like(values)
+    aligned[valid] = (1.0 - alpha) * values[index[valid]]
+    if alpha:
+        aligned[valid] += alpha * values[index[valid] + 1]
+    return aligned, valid
+
+
+def fried_seeing_arcsec(r0_m, wavelength_m):
+    """Long-exposure Kolmogorov seeing: 0.976 lambda/r0, in arcsec."""
+    r0_m = float(r0_m)
+    wavelength_m = float(wavelength_m)
+    if not (np.isfinite(r0_m) and r0_m > 0
+            and np.isfinite(wavelength_m) and wavelength_m > 0):
+        raise ValueError("r0 and wavelength must be finite positive values")
+    return 0.976 * rad2arc * wavelength_m / r0_m
+
+
 class systemDiagnosis:
 
     def __init__(self, trs, noiseMethod='autocorrelation', nshift=1, nfit=2,
@@ -97,7 +177,9 @@ class systemDiagnosis:
         self.trs.atm.tau0_tel = tau0
         self.trs.atm.v0_tel = v0
         self.trs.atm.dr0_tel = dr0
-        self.trs.atm.dseeing_tel= rad2arc * dr0 * self.trs.atm.wvl/r0**2
+        self.trs.atm.dseeing_tel = (
+            0.976 * rad2arc * dr0 * self.trs.atm.wvl / r0**2
+        )
         self.trs.atm.dL0_tel = dL0
         self.trs.atm.dtau0_tel= dtau0
         self.trs.atm.dv0_tel = dv0
@@ -105,7 +187,9 @@ class systemDiagnosis:
         # update the atmosphere structure
         self.trs.atm.r0 = r0
         self.trs.atm.L0 = L0
-        self.trs.atm.seeing = rad2arc * self.trs.atm.wvl/r0
+        self.trs.atm.seeing = fried_seeing_arcsec(
+            r0, self.trs.atm.wvl
+        )
         if len(self.trs.atm.Cn2Weights) > 1:
             vm = FourierUtils.eqLayers(np.array(self.trs.atm.Cn2Weights),np.array(self.trs.atm.wSpeed),nEqLayers=1)[1]
             self.trs.atm.wSpeed = list(v0 * np.array(self.trs.atm.wSpeed)/vm)
@@ -115,9 +199,9 @@ class systemDiagnosis:
 #%%
     def temporal_transfer_function(self):
         def delay_transfer_function(freq,fSamp,delay):
-            return np.exp(-2*complex(0,1)*freq*delay/fSamp)
+            return _tt_latency_response(freq, fSamp, delay)
         def wfs_transfer_function(freq,fSamp):
-            return np.sinc(freq/fSamp/np.pi)*np.exp(-1*complex(0,1)*freq/fSamp)
+            return _tt_sensor_integration_response(freq, fSamp)
         def servo_transfer_function(freq,fSamp,num,den):
             z = np.exp(-2*complex(0,1)*np.pi*freq/fSamp)
             ho_num = num[0] + num[1]*z + num[2]*z**2 + num[3]*z**3
@@ -125,7 +209,9 @@ class systemDiagnosis:
             return ho_num/ho_den
 
         #1\ HIGH-ORDER LOOP
-        self.trs.holoop.tf.freq = np.linspace(self.trs.holoop.freq/self.trs.wfs.nExp,self.trs.wfs.nExp/2,num=self.trs.wfs.nExp//2)*self.trs.holoop.freq/self.trs.wfs.nExp
+        self.trs.holoop.tf.freq = _positive_fft_frequency_grid(
+            self.trs.holoop.freq, self.trs.wfs.nExp
+        )
         #1.2 wfs TF
         self.trs.holoop.tf.wfs  = wfs_transfer_function(self.trs.holoop.tf.freq,self.trs.holoop.freq)
         #1.3. Lag tf
@@ -144,7 +230,9 @@ class systemDiagnosis:
 
         # 2\ TT LOOP
         #2.1. Define the frequency vectors
-        self.trs.ttloop.tf.freq = np.linspace(self.trs.ttloop.freq/self.trs.tipTilt.nExp,self.trs.tipTilt.nExp/2,self.trs.tipTilt.nExp//2)*self.trs.ttloop.freq/self.trs.tipTilt.nExp
+        self.trs.ttloop.tf.freq = _positive_fft_frequency_grid(
+            self.trs.ttloop.freq, self.trs.tipTilt.nExp
+        )
         #2.2 wfs TF
         self.trs.ttloop.tf.wfs = _tt_sensor_integration_response(
             self.trs.ttloop.tf.freq, self.trs.ttloop.freq
@@ -237,9 +325,14 @@ class systemDiagnosis:
                     Cnn[i,i] = mx - yfit[0]
 
             if noiseMethod=='autocorrelation':
-                du_n  = u - np.roll(u,-nshift,axis=0)
-                du_p  = u - np.roll(u,nshift,axis=0)
-                Cnn   = 0.5*(np.matmul(u.T,du_n + du_p))/nF
+                # In an NGS finite telemetry record there is no physical
+                # final-to-first RTC sample transition. Historical np.roll
+                # inserted an endpoint-jump noise contribution which can
+                # produce negative eigenvalues after HO subtraction.
+                # Keep LGS periodic behavior for previous n0013 comparison.
+                Cnn = autocorrelation_noise_covariance(
+                    u, nshift=nshift, periodic=self.trs.aoMode != 'NGS'
+                )
 
             return Cnn
 
@@ -301,9 +394,19 @@ class systemDiagnosis:
                     self.trs.tipTilt.slopes, noiseMethod=noiseMethod,
                     nshift=nshift, nfit=nfit, rtf=rtf
                 )
-                self.trs.tipTilt.noise_estimation_method = noiseMethod
+                self.trs.tipTilt.noise_estimation_method = (
+                    'autocorrelation_nonperiodic'
+                    if noiseMethod == 'autocorrelation' else noiseMethod
+                )
                 self.trs.tipTilt.noise_estimation_diagnostics = {
-                    'method': noiseMethod, 'noise_model_validated': False
+                    'method': self.trs.tipTilt.noise_estimation_method,
+                    'original_method': noiseMethod,
+                    'finite_record_no_wrap': noiseMethod == 'autocorrelation',
+                    'noise_model_validated': False,
+                    'warning': (
+                        'NGS noise estimated from lag differences, not an '
+                        'independent calibrated sensor-noise measurement'
+                    ),
                 }
 
 
@@ -384,17 +487,32 @@ class systemDiagnosis:
 
         # ----  RECONSTRUCTING THE COEFFICIENTS
         # open-loop reconstruction
-        dt = self.trs.holoop.lat * self.trs.holoop.freq
-        dt_up = int(np.ceil(dt))
-        dt_lo = int(np.floor(dt))
-        self.trs.dm.com_delta = (1-dt_up+dt)*np.roll(self.trs.rec.res,(-dt_up,0)) + (1-dt+dt_lo)*np.roll(self.trs.rec.res,(-dt_lo,0))
-        self.trs.dm.u_ol = self.trs.dm.com + self.trs.dm.com_delta
-        self.trs.dm.u_ol -= np.mean(self.trs.dm.u_ol,axis=1)[:,np.newaxis]
+        dt = float(self.trs.holoop.lat * self.trs.holoop.freq)
+        self.trs.dm.com_delta, valid_frames = interpolate_forward_residual_no_wrap(
+            self.trs.rec.res, dt
+        )
+        # Use the SAME valid time window in both measurements. Do not allow
+        # an artificial last-to-first residual transition, and do not use
+        # flattened roll which mixes successive actuator columns.
+        if self.trs.dm.com.shape != self.trs.rec.res.shape:
+            raise ValueError("DM commands and reconstructed residual have different shapes")
+        self.trs.dm.u_ol = (
+            self.trs.dm.com[valid_frames] + self.trs.dm.com_delta[valid_frames]
+        )
+        self.trs.dm.u_ol -= np.mean(self.trs.dm.u_ol, axis=1)[:, np.newaxis]
+        self.trs.dm.pseudo_ol_delay_frames = dt
+        self.trs.dm.pseudo_ol_frames_used = int(valid_frames.sum())
+        self.trs.dm.pseudo_ol_frames_dropped = int((~valid_frames).sum())
+        self.trs.dm.pseudo_ol_alignment = 'future_residual_linear_no_wrap'
+        self.trs.dm.pseudo_ol_sign_independently_verified = False
 
-        # reconstructing the amplitude of Zernike coefficients
-        self.trs.wfs.coeffs = np.dot(self.trs.mat.u2z, self.trs.dm.u_ol[:,self.actuInPupil].T)
-        self.trs.wfs.coeffs -= np.mean(self.trs.wfs.coeffs, axis=1)[:,np.newaxis]
-        Cz_ho = np.dot(self.trs.wfs.coeffs,self.trs.wfs.coeffs.T)/self.trs.wfs.nExp
+        # Reconstruct Zernike statistics from the aligned, valid frames.
+        self.trs.wfs.coeffs = np.dot(
+            self.trs.mat.u2z, self.trs.dm.u_ol[:, self.actuInPupil].T
+        )
+        self.trs.wfs.coeffs -= np.mean(self.trs.wfs.coeffs, axis=1)[:, np.newaxis]
+        Cz_ho = (self.trs.wfs.coeffs @ self.trs.wfs.coeffs.T
+                 / self.trs.dm.pseudo_ol_frames_used)
 
         #tip-tilt case
         if self.trs.aoMode == 'LGS':

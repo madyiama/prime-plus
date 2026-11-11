@@ -8,6 +8,8 @@ Created on Thu Apr  8 09:37:55 2021
 
 #%% IMPORTING LIBRARIES
 import numpy as np
+from pathlib import Path
+import warnings
 from astropy.table import Table
 import matplotlib.pyplot as plt
 
@@ -68,10 +70,40 @@ def getScale(hdr):
     else:
         return None
 
+def getPupilAngles(hdr):
+    """Keck II AO Note 1160 (Ragland 2017), for science NIRC2 images.
+
+    The sky position angle on NIRC2 (ROTPOSN - INSTANGL) is NOT the
+    pupil angle. The physical NIRC2 pupil orientation in the note's
+    'hat-top' zero reference is EL - ROTPPOSN. The WFS sees the opposite
+    sign, with a different pupil reference; these values must not be
+    interchanged or assigned to a mask with an unknown reference zero.
+    """
+    required = ('EL', 'ROTPPOSN', 'ROTPOSN', 'INSTANGL')
+    missing = [name for name in required if name not in hdr]
+    if missing:
+        raise ValueError(
+            "Cannot reconstruct Keck NIRC2 pupil orientation: "
+            f"missing FITS keyword(s) {missing}; no sky-PA fallback is physical"
+        )
+    el = float(hdr['EL'])
+    rotpposn = float(hdr['ROTPPOSN'])
+    sky_pa = float(hdr['ROTPOSN']) - float(hdr['INSTANGL'])
+    if not np.all(np.isfinite((el, rotpposn, sky_pa))):
+        raise ValueError("Invalid, non-finite NIRC2 pupil/sky position angle")
+    return {
+        'sky_position_angle_deg': sky_pa,
+        'nirc2_pupil_angle_deg': el - rotpposn,
+        'wfs_pupil_angle_deg': rotpposn - el,
+        'reference': 'KAON1160_NIRC2_hat_top_zero',
+        'mask_zero_offset_calibrated': False,
+        'formula': 'NIRC2 pupil = EL - ROTPPOSN',
+    }
+
+
 def getPA(hdr):
-    #theta = float(hdr['ROTPOSN']) - float(hdr['EL']) - getInstAngle(hdr)
-    theta = float(hdr['ROTPOSN']) - getInstAngle(hdr)
-    return theta
+    """Pupil angle for NIRC2, NOT the camera sky position angle."""
+    return getPupilAngles(hdr)['nirc2_pupil_angle_deg']
 
 def getPupilMask(hdr):
     return hdr['PMSNAME']
@@ -109,60 +141,75 @@ def getGain(hdr):
 def getFilterName(hdr):
     instName = getInstName(hdr)
     if instName == 'NIRC2':
-        filter1 = hdr['fwiname']
-        filter2 = hdr['fwoname']
-        filt = filter1
-        if (filter1.startswith('PK')):
-            filt = filter2
-
-        return filt
+        filter1 = str(hdr['fwiname']).strip()
+        filter2 = str(hdr['fwoname']).strip()
+        # A wheel holding an open position or blocking glass does not
+        # identify the scientific passband. Select the other wheel.
+        if filter1.upper().startswith(('PK', 'CLEAR', 'OPEN')):
+            return filter2
+        return filter1
     elif instName == 'OSIRIS':
         f = hdr['ifilter']
         return f.split('-')[0]
     else:
         return None
 
-def getFilterProfile(path_filter,spectral_filter):
+def _find_filter_profile_file(path_filter, spectral_filter):
+    """Resolve locally tabulated NIRC2 profiles without a hard-coded whitelist."""
+    folder = Path(path_filter)
+    wanted = ''.join(ch for ch in str(spectral_filter).casefold() if ch.isalnum())
+    # Keck documentation calls the methane filters CH4S/CH4L, whereas
+    # NIRC2 FITS headers use CH4_short / CH4_long.
+    aliases = {'ch4short': 'ch4s', 'ch4long': 'ch4l'}
+    equivalent_names = {wanted, aliases.get(wanted, wanted)}
+    if not wanted:
+        raise FileNotFoundError("No NIRC2 science-filter name in the FITS header")
+    if not folder.is_dir():
+        raise FileNotFoundError(f"NIRC2 filter-profile directory missing: {folder}")
+    available = sorted(folder.glob("*.dat"))
+    for candidate in available:
+        normalized = ''.join(ch for ch in candidate.stem.casefold() if ch.isalnum())
+        if normalized in equivalent_names:
+            return candidate
+    names = ', '.join(item.stem for item in available)
+    raise FileNotFoundError(
+        f"No tabulated NIRC2 transmission for {spectral_filter!r} in {folder}; "
+        f"available profiles: {names or '(none)'}"
+    )
+
+
+def getFilterProfile(path_filter, spectral_filter):
+    """Read a local NIRC2 filter curve; never return None on an unknown filter.
+
+    The original calibration tables store wavelengths in microns and
+    transmission in percent. Missing profiles raise FileNotFoundError, which
+    the sampling layer may handle via a clearly-labelled FITS-header proxy.
     """
-    Returns the wavelength (in microns) and the transmission for
-    the specified NIRC2 filter.
+    profile_path = _find_filter_profile_file(path_filter, spectral_filter)
+    table = Table.read(str(profile_path), format='ascii')
+    wavelength = np.asarray(table[table.colnames[0]], dtype=float).copy()
+    transmission = np.asarray(table[table.colnames[1]], dtype=float).copy()
+    if wavelength.ndim != 1 or len(wavelength) < 2:
+        raise ValueError(f"Invalid NIRC2 transmission table: {profile_path}")
+    if not (np.all(np.isfinite(wavelength)) and np.all(np.isfinite(transmission))):
+        raise ValueError(f"Non-finite NIRC2 transmission table: {profile_path}")
+    # Original .dat files are percentages; accept a fraction-valued table
+    # only when explicitly recognizable from the maximum throughput.
+    if np.max(transmission) > 1.0:
+        transmission = transmission / 100.0
+    valid = transmission > 0.01
+    wavelength = wavelength[valid]
+    transmission = transmission[valid]
+    if len(wavelength) < 2:
+        raise ValueError(f"No usable NIRC2 transmission points: {profile_path}")
+    order = np.argsort(wavelength)
+    wavelength = wavelength[order]
+    transmission = transmission[order]
+    # Match original treatment of duplicate wavelength samples.
+    repeated = np.where(np.diff(wavelength) <= 0)[0]
+    wavelength[repeated + 1] += 1e-7
+    return wavelength * 1e-6, transmission
 
-    Example:
-    (wave, trans) = nirc2.photometry.get_filter_profile('Kp')
-    py.clf()
-    py.plot(wave, trans)
-    py.xlabel('Wavelength (microns)')
-    py.ylabel('Transmission')
-    """
-    spectral_filter = spectral_filter.replace('_','')
-
-    filters = ['J', 'H', 'K', 'Kcont', 'Kp', 'Ks', 'Lp', 'Ms',
-               'Hcont', 'Brgamma', 'FeII']
-
-    filters_upper = [x.upper() for x in filters]
-
-    if spectral_filter.upper() not in filters_upper:
-        print( 'Could not find profile for filter %s.' % spectral_filter)
-        print( 'Choices are: ', filters)
-        return
-
-    spectral_filter = filters[filters_upper.index(spectral_filter.upper())]
-    table = Table.read(path_filter + spectral_filter + '.dat', format='ascii')
-
-    wavelength = table[table.colnames[0]]
-    transmission = table[table.colnames[1]]
-
-    # Lets fix wavelength array for duplicate values
-    diff = np.diff(wavelength)
-    idx = np.where(diff <= 0)[0]
-    wavelength[idx+1] += 1.0e-7
-
-    # Get rid of all entries with negative transmission
-    idx = np.where(transmission > 1)[0]
-    wavelength = wavelength[idx]
-    transmission = transmission[idx] / 100.0 # convert from % to ratio
-
-    return (wavelength*1e-6, transmission)
 
 def getDate(hdr):
     return hdr['DATE-OBS']
@@ -214,50 +261,128 @@ def getExposureConfig(hdr):
     return ittime,coadds,sampmode,numreads,ron,gain
 
 def samplingFilterProfile(path_filter, hdr, nWvl=3, thresold=0.9,
-                          bwMin = 100e-9, display=False):
+                          bwMin=100e-9, display=False, return_metadata=False):
+    """Compress a tabulated NIRC2 filter or use a labelled header-only proxy.
+
+    Missing tables may use CENWAVE/MINWAVE/MAXWAVE from the science FITS
+    header, with flat spectral weights. This supports exploratory PSF-R,
+    not a calibrated passband or a quantitative chromatic PSF comparison.
     """
-    """
-    # reading the .dat file
     instName = getInstName(hdr)
-    (wvl_all,tr_all)= getFilterProfile(path_filter,getFilterName(hdr))
-    # fitting the transmission curve
-    id_f    = tr_all > thresold*tr_all.max()
-    tr_f    = tr_all[id_f]
-    wvl_f   = wvl_all[id_f]
-    # linear regression
-    p       = np.polyfit(wvl_f,tr_f,1)
-    tr_f    = np.polyval(p,wvl_f)
-    # compressing the profile for PSF fitting; more bins means longer PSF model computation
+    filter_name = getFilterName(hdr)
+    metadata = {
+        'instrument': instName,
+        'filter_name': filter_name,
+        'composite_filter': hdr.get('FILTER'),
+        'source': None,
+        'tabulated_transmission_curve_available': False,
+        'flat_transmission_approximation': False,
+    }
+    try:
+        wvl_all, tr_all = getFilterProfile(path_filter, filter_name)
+    except FileNotFoundError as exc:
+        if not Path(path_filter).is_dir():
+            raise FileNotFoundError(
+                f"NIRC2 filter calibration directory does not exist: {path_filter}"
+            ) from exc
+        if str(filter_name).upper().startswith(('CLEAR', 'OPEN', 'PK')):
+            raise ValueError(
+                f"No active NIRC2 science passband identified; "
+                f"inner/outer filter wheels: "
+                f"{hdr.get('FWINAME')!r}/{hdr.get('FWONAME')!r}"
+            ) from exc
+        if instName != 'NIRC2':
+            raise ValueError(
+                f"Missing {instName!r} filter curve for {filter_name!r}; "
+                "no instrument-agnostic fallback is defined"
+            ) from exc
+        try:
+            minimum_um = float(hdr['MINWAVE'])
+            centre_um = float(hdr['CENWAVE'])
+            maximum_um = float(hdr['MAXWAVE'])
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(
+                f"Unknown NIRC2 filter {filter_name!r} and missing/invalid "
+                "MINWAVE, CENWAVE or MAXWAVE for provisional reconstruction"
+            ) from error
+        if not (np.isfinite(minimum_um) and np.isfinite(centre_um)
+                and np.isfinite(maximum_um)
+                and 0 < minimum_um < centre_um < maximum_um):
+            raise ValueError(
+                f"Unknown NIRC2 filter {filter_name!r}; invalid wavelength "
+                f"interval {minimum_um}, {centre_um}, {maximum_um} microns"
+            ) from exc
+        bw = (maximum_um - minimum_um) * 1e-6
+        if bw <= bwMin:
+            wavelengths = np.array([centre_um * 1e-6])
+        else:
+            wavelengths = np.linspace(minimum_um, maximum_um, nWvl) * 1e-6
+        transmission = np.ones(len(wavelengths), dtype=float)
+        dispersion = [list(np.zeros(len(wavelengths))),
+                      list(np.zeros(len(wavelengths)))]
+        if bw <= bwMin:
+            bw = 0.0
+        metadata.update({
+            'source': 'fits_header_flat_passband',
+            'flat_transmission_approximation': True,
+            'header_central_wavelength_um': centre_um,
+            'header_min_wavelength_um': minimum_um,
+            'header_max_wavelength_um': maximum_um,
+            'approximation_warning': (
+                "No transmission profile in local calibration; provisional "
+                "flat weights over science FITS header passband, not calibrated"
+            ),
+        })
+        warnings.warn(
+            f"NIRC2 filter {filter_name!r}: no local transmission curve. "
+            f"Using an UNCALIBRATED flat passband from FITS header "
+            f"({minimum_um:g}-{maximum_um:g} um). Chromatic/photometric "
+            "benchmark results are provisional.",
+            RuntimeWarning, stacklevel=2,
+        )
+        result = (wavelengths, bw, transmission, dispersion)
+        return (*result, metadata) if return_metadata else result
+
+    # Existing tabulated-profile sampling: prioritize measured curves.
+    id_f = tr_all > thresold * tr_all.max()
+    tr_f = tr_all[id_f]
+    wvl_f = wvl_all[id_f]
+    if len(wvl_f) < 2:
+        raise ValueError(
+            f"NIRC2 filter {filter_name!r} has fewer than two usable "
+            f"transmission points above relative threshold {thresold}"
+        )
+    p = np.polyfit(wvl_f, tr_f, 1)
+    tr_f = np.polyval(p, wvl_f)
     wvlMin = wvl_f.min()
     wvlMax = wvl_f.max()
-    bw     = wvlMax - wvlMin
-    # consider a monochromatic filter if the bandwith is smaller than the threshold
+    bw = wvlMax - wvlMin
     if bw <= bwMin:
         nWvl = 1
-    # perform the linear regression on the desired wavelengths
     if nWvl > 1:
-        wvl_c  = np.linspace(wvlMin,wvlMax,nWvl)
-
-    elif nWvl <=1:
-         wvl_c  = np.array([getCentralWavelength(hdr)])
-         bw     = 0.0
-    tr_c   = np.polyval(p,wvl_c)
-
-    # assumption : no chromatic dispersion
-    disp = [list(np.zeros(nWvl)),list(np.zeros(nWvl))]
-
+        wvl_c = np.linspace(wvlMin, wvlMax, nWvl)
+    else:
+        wvl_c = np.array([getCentralWavelength(hdr)])
+        bw = 0.0
+    tr_c = np.polyval(p, wvl_c)
+    disp = [list(np.zeros(nWvl)), list(np.zeros(nWvl))]
     if display:
-        # plotting
-        plt.figure(figsize=(7,7))
-        plt.plot(wvl_all*1e6,tr_all,'b',label='True profile')
-        plt.plot(wvl_f*1e6,tr_f,'r',label='Fitted profile')
-        plt.plot(wvl_c*1e6,tr_c,'ks',label='Compressed profile')
-        plt.xlabel('Wavelength [µm]')
+        plt.figure(figsize=(7, 7))
+        plt.plot(wvl_all*1e6, tr_all, 'b', label='Tabulated profile')
+        plt.plot(wvl_f*1e6, tr_f, 'r', label='Fitted profile')
+        plt.plot(wvl_c*1e6, tr_c, 'ks', label='Compressed profile')
+        plt.xlabel('Wavelength [um]')
         plt.ylabel('Transmission')
-        plt.title(instName+' filter transmission')
+        plt.title(instName + ' filter transmission')
         plt.legend()
+    metadata.update({
+        'source': 'local_transmission_table',
+        'profile_file': str(_find_filter_profile_file(path_filter, filter_name)),
+        'tabulated_transmission_curve_available': True,
+    })
+    result = (wvl_c, bw, tr_c, disp)
+    return (*result, metadata) if return_metadata else result
 
-    return wvl_c, bw, tr_c, disp
 
 def getSaturationLevel(instName):
         """
