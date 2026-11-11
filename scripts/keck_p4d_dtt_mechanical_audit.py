@@ -149,7 +149,7 @@ def main():
     spec=report["spectral_response"]
     if spec["status"]=="ok":
         print(f"[Spectral] Welch={spec['nperseg_effective']}, "
-              f"windows={spec['total_independent_welch_windows']}, "
+              f"windows={spec['total_welch_windows_50_percent_overlap']}, "
               f"scope={spec['segment_role']}")
         for axis in spec["axes"]:
             print(f"  axis {axis['axis']}: phase delay "
