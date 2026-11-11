@@ -365,3 +365,48 @@ def test_pixel_otf_uses_same_detector_frequency_grid_as_direct_tt():
         fake.pixel_optical_transfer_function(),expected,
         rtol=1e-13,atol=1e-13
     )
+
+
+def test_independent_native_arcsec_noise_joins_source_angles_without_noll():
+    raw=_synthetic_keck_centroids(1200)
+    D=10.5
+    gain=zernike_tilt_opd_per_arcsec(D)
+    native_noise=np.array([[0.00012,0.00001],[0.00001,0.00015]])
+    opd_noise=native_noise*gain**2
+    direct,metadata=direct_angular_tt_covariance(
+        raw,opd_noise,D,method="legacy_psfr",pn=0.14,
+        native_noise_arcsec2=native_noise,
+    )
+    fallback,_=direct_angular_tt_covariance(
+        raw,opd_noise,D,method="legacy_psfr",pn=0.14,
+    )
+    np.testing.assert_allclose(direct,fallback,rtol=1e-13,atol=1e-26)
+    assert metadata["sensor_noise_angular_source"] == (
+        "noise_estimator_directly_on_DTTCENTROIDS_arcsec"
+    )
+    with pytest.raises(ValueError,match="angular noise and Noll-OPD"):
+        direct_angular_tt_covariance(
+            raw,opd_noise,D,method="legacy_psfr",pn=0.14,
+            native_noise_arcsec2=1.03*native_noise,
+        )
+
+
+def test_native_arcsec_and_opd_welch_noise_estimation_are_scale_identical():
+    from p3.telemetry.ttNoise import estimate_tt_noise
+    raw=_synthetic_keck_centroids(4096)
+    D=10.5
+    gain=zernike_tilt_opd_per_arcsec(D)
+    fs=500.0
+    f=np.linspace(0,fs/2,257)
+    S=np.ones_like(f)
+    kwargs=dict(
+        method="van_dam",sample_rate_hz=fs,
+        rejection_frequency_hz=f,rejection_transfer=S,
+        high_frequency_band=(0.65,0.95),nperseg=512,
+    )
+    native,diagnostics=estimate_tt_noise(raw,**kwargs)
+    opd,diagnostics_opd=estimate_tt_noise(
+        (raw-raw.mean(axis=0))*gain,**kwargs
+    )
+    np.testing.assert_allclose(native*gain**2,opd,rtol=1e-12,atol=1e-26)
+    assert diagnostics["fit_bin_count"] == diagnostics_opd["fit_bin_count"]
