@@ -123,12 +123,9 @@ def _sample_prior_uncertainties(r0,L0,dr0,dL0):
         ])
     if dL0 is not None and dL0>0:
         cases.extend([
-            ("L0_minus_reported_error",max(L0-dL0,1.),),
+            ("L0_minus_reported_error",r0,max(L0-dL0,1.)),
+            ("L0_plus_reported_error",r0,min(L0+dL0,300.)),
         ])
-        # Replace the deliberately short tuple above by the actual pair;
-        # the other branch must never sample a nonphysical outer scale.
-        cases[-1]=(cases[-1][0],r0,cases[-1][1])
-        cases.append(("L0_plus_reported_error",r0,L0+dL0))
     return cases
 
 
@@ -149,7 +146,7 @@ def run_g1_to_g5(trs, *,kernel,science_offset_pupil_arcsec=None,
     weights,heights,speeds,dirs=_profile(trs)
     x=np.asarray(trs.tipTilt.slopes_arcsec,dtype=float)
     fs=float(trs.ttloop.freq)
-    if (not 0.5<r0<3.0 or not 1.<=L0<=300. or
+    if (not 0.005<r0<3.0 or not 1.<=L0<=300. or
         x.ndim!=2 or x.shape[1]!=2 or len(x)<nperseg):
         raise ValueError("Unphysical HO prior or insufficient matched STRAP frames")
     fmin=fs/nperseg
@@ -414,6 +411,7 @@ def main():
         n_rad=args.radial_points,n_az=args.azimuth_points
     )
     print("[P4-G] G1 pupil Fourier kernel ready",flush=True)
+    args.output.mkdir(parents=True,exist_ok=True)
     trs=telemetryKeck(
         str(args.sav.resolve()),str(args.fits.resolve()),
         str(args.calib.resolve()),
