@@ -356,6 +356,99 @@ def run_g1_to_g5(trs, *,kernel,science_offset_pupil_arcsec=None,
     return _as_json(report)
 
 
+def _make_summary_plot(report,destination):
+    """Plot the HO/STRAP matched-band comparison without selecting gain."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    cases=report["G4_sensitivity"]["cases"]
+    prior=report["G4_sensitivity"]["prior_scenarios"]
+    nominal=next(c for c in cases
+                 if c["assumed_gain"]==1.
+                 and c["van_dam_nyquist_band"]==[.65,.95])
+    fig,ax=plt.subplots(2,2,figsize=(13,9),constrained_layout=True)
+
+    for case in cases:
+        if case["van_dam_nyquist_band"]==[.65,.95]:
+            g=case["assumed_gain"]
+            C=np.asarray(
+                case["G2_predicted_atmospheric_residual_matched_band_cov_rad2"],
+                dtype=float)
+            B=np.asarray(
+                case["G3_measured_STRAP_atmospheric_band_cov_arcsec2"],
+                dtype=float)*ARCSEC_TO_RAD**2
+            for panel,matrix,label in (
+                (ax[0,0],C,"HO-predicted atmospheric residual"),
+                (ax[0,0],B,"STRAP-inferred atmospheric residual"),
+            ):
+                eig=np.linalg.eigvalsh(matrix)
+                rms=(np.sqrt(np.trace(matrix)/2)*RAD_TO_MAS
+                     if eig.min()>=-1e-6*max(abs(eig).max(),1e-40)
+                     and np.trace(matrix)>0 else float("nan"))
+                panel.scatter([g],[rms],label=label if g==1. else None)
+    ax[0,0].set(xlabel="Assumed optical gain g (NOT fitted)",
+                ylabel="Band atmospheric RMS/axis [mas]",
+                title="G2 vs G3: same atmospheric band")
+    ax[0,0].legend()
+    ax[0,0].grid(alpha=.25)
+
+    bands=sorted(set(tuple(c["van_dam_nyquist_band"]) for c in cases))
+    for band in bands:
+        ordered=sorted([c for c in cases
+                        if tuple(c["van_dam_nyquist_band"])==band],
+                       key=lambda c:c["assumed_gain"])
+        gains=[c["assumed_gain"] for c in ordered]
+        alphas=[c["G4_alpha_HO_prediction_over_STRAP_atmosphere"].get("alpha")
+                for c in ordered]
+        ax[0,1].plot(gains,[a if a is not None else float("nan")
+                            for a in alphas],"o-",label=str(band))
+    ax[0,1].axhline(1,color="0.65",ls="--")
+    ax[0,1].set(xlabel="Assumed optical gain g (NOT fitted)",
+                ylabel="Conditional alpha, not an optical gain",
+                title="G4: HO / STRAP trace consistency")
+    ax[0,1].legend(title="van Dam Nyquist bands")
+    ax[0,1].grid(alpha=.25)
+
+    for label in sorted(set(x["prior_case"] for x in prior)):
+        ordered=sorted((x for x in prior if x["prior_case"]==label),
+                       key=lambda x:x["wind_common_rotation_deg"])
+        ax[1,0].plot(
+            [x["wind_common_rotation_deg"] for x in ordered],
+            [x["predicted_HO_atmos_band_trace_rad2"]**.5*RAD_TO_MAS/np.sqrt(2)
+             for x in ordered],"o-",label=label,
+        )
+    ax[1,0].set(xlabel="Common wind-direction rotation [deg]",
+                ylabel="Predicted HO residual RMS/axis [mas]",
+                title="G4: HO-prior and unmeasured-wind sensitivity")
+    ax[1,0].legend(fontsize="x-small")
+    ax[1,0].grid(alpha=.25)
+
+    g5=report["G5_anisokinetism_separate"]
+    g1=report["G1_incident"]
+    ax[1,1].axis("off")
+    info=(
+        "G1: HO POL atmospheric prior\\n"
+        f"  r0 = {g1['r0_HO_POL_m']:.4g} m\\n"
+        f"  L0 = {g1['L0_HO_POL_m']:.4g} m\\n"
+        f"  incident NGS principal RMS = "
+        f"{g1['incident_ngs_principal_rms_mas']} mas\\n\\n"
+        "G5: Anisokinetism is already modeled in P3 dani_tt\\n"
+        f"  status: {g5['status']}\\n"
+        "  G5 is NEVER added to G2, G3, or production OTF.\\n\\n"
+        "Interpretation: exploratory HO-constrained TT check only.\\n"
+        "No physical optical-gain calibration or science PSF fit."
+    )
+    ax[1,1].text(0,1,info,transform=ax[1,1].transAxes,
+                 ha="left",va="top",fontsize=10)
+    fig.suptitle(
+        "P4-G Keck: atmospheric residual in NGS STRAP direction "
+        "(anisokinetism separate)"
+    )
+    fig.savefig(destination,dpi=160)
+    plt.close(fig)
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fits",required=True,type=Path)
@@ -451,6 +544,8 @@ def main():
     path.write_text(
         json.dumps(report,indent=2,allow_nan=False),encoding="utf-8"
     )
+    plot_path=args.output/"p4g_ho_to_tt.png"
+    _make_summary_plot(report,plot_path)
     g1=report["G1_incident"]
     g2=report["G2_closed_loop"]
     g3=report["G3_strap_measured"]
@@ -471,6 +566,7 @@ def main():
           report["G5_anisokinetism_separate"]["status"])
     print("[P4-G] No production jitter, OTF, or anisokinetism modified.")
     print("[P4-G] Saved:",path)
+    print("[P4-G] Figure:",plot_path)
 
 
 if __name__=="__main__":
