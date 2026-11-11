@@ -190,31 +190,46 @@ def sensitivity_audit(centroids_arcsec, loop, *, mirrors=MIRRORS,
                 }
                 if band == REFERENCE_BAND and nperseg == REFERENCE_WELCH:
                     if mirror == "unity":
+                        if projected:
+                            raise ValueError(
+                                "Reference van Dam sensor covariance required "
+                                "PSD repair; P4-B will not promote it silently"
+                            )
                         reference_noise = cov.copy()
-                try:
-                    atmosphere, propagated, total, report = (
-                        physical_tt_covariance_from_telemetry(
-                            samples, cov, loop, mirror_model=mirror,
-                            nperseg=nperseg,
+                if projected:
+                    # The existing van Dam function projects noise onto PSD.
+                    # Record the *unprojected* covariance and disallow any
+                    # downstream interpretation of this repaired noise result.
+                    row["spectral_physical"] = {
+                        "status": "invalid_sensor_noise_psd_projection",
+                        "covariance_was_clipped_by_historical_estimator": True,
+                        "physical_covariance_not_computed": True,
+                    }
+                else:
+                    try:
+                        atmosphere, propagated, total, report = (
+                            physical_tt_covariance_from_telemetry(
+                                samples, cov, loop, mirror_model=mirror,
+                                nperseg=nperseg,
+                            )
                         )
-                    )
-                    row["spectral_physical"] = {
-                        "status": "computed_unvalidated",
-                        "atmosphere": _matrix_summary(atmosphere),
-                        "propagated_noise": _matrix_summary(propagated),
-                        "total": _matrix_summary(total),
-                        "sensor_to_measured_noise_gain":
-                            report["gain_sensor_to_measured_noise"],
-                        "sensor_to_physical_noise_gain":
-                            report["gain_sensor_to_physical_noise"],
-                        "noise_transfer_mismatch": False,
-                    }
-                except ValueError as exc:
-                    row["spectral_physical"] = {
-                        "status": "failed_physical_model_validation",
-                        "error": str(exc),
-                        "covariance_was_clipped": False,
-                    }
+                        row["spectral_physical"] = {
+                            "status": "computed_unvalidated",
+                            "atmosphere": _matrix_summary(atmosphere),
+                            "propagated_noise": _matrix_summary(propagated),
+                            "total": _matrix_summary(total),
+                            "sensor_to_measured_noise_gain":
+                                report["gain_sensor_to_measured_noise"],
+                            "sensor_to_physical_noise_gain":
+                                report["gain_sensor_to_physical_noise"],
+                            "noise_transfer_mismatch": False,
+                        }
+                    except ValueError as exc:
+                        row["spectral_physical"] = {
+                            "status": "failed_physical_model_validation",
+                            "error": str(exc),
+                            "covariance_was_clipped": False,
+                        }
                 rows.append(row)
     if reference_noise is None:
         raise ValueError("Baseline unity 0.65-0.95 Welch512 not evaluated")
@@ -263,6 +278,10 @@ def sensitivity_audit(centroids_arcsec, loop, *, mirrors=MIRRORS,
         "feedback": identities,
         "fixed_unity_noise_plant_sensitivity": fixed_noise,
         "rows": rows,
+        "any_noise_psd_projection": any(
+            row["noise_covariance_was_psd_projected"] for row in rows
+        ),
+        "projected_noise_disallowed_as_physical_evidence": True,
         "not_ranked_by_science_image": True,
         "physical_model_validated": False,
         "none_of_these_are_keck_2020_calibrations": True,
@@ -314,6 +333,13 @@ def flux_segment_audit(raw_apd_counts, sky, imat, centroids_arcsec, loop,
             ),
             "predicted_ideal_apd_noise": _matrix_summary(predicted_apd),
             "van_dam_noise": _matrix_summary(vd),
+            "van_dam_unprojected_eigenvalues_arcsec2": np.linalg.eigvalsh(
+                np.asarray(diag["unprojected_noise_covariance_m2"], dtype=float)
+            ).tolist(),
+            "van_dam_noise_was_psd_projected": not np.allclose(
+                vd, np.asarray(diag["unprojected_noise_covariance_m2"], dtype=float),
+                rtol=1e-10, atol=1e-30,
+            ),
             "van_dam_noise_to_apd_trace_ratio": float(
                 _trace(vd)/_trace(predicted_apd)
             ),
