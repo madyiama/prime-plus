@@ -103,33 +103,55 @@ def test_reject_silent_ignored_mirror_and_invalid_timing_config():
 
 
 def test_changing_noise_only_changes_legacy_residual_not_angular_otf_formula():
-    rng=np.random.default_rng(443)
-    raw=rng.normal(0,0.06,size=(2048,2))
-    D=10.5
-    gain=zernike_tilt_opd_per_arcsec(D)
-    c1,_=estimate_tt_noise(
-        raw,method="van_dam",sample_rate_hz=125.,
-        rejection_frequency_hz=np.linspace(0,62.5,1025),
-        rejection_transfer=np.ones(1025),
-        high_frequency_band=(0.65,0.95),nperseg=512,
-    )
-    c2,_=estimate_tt_noise(raw,method="gendron")
-    assert not np.allclose(c1,c2,rtol=1e-4,atol=1e-8)
-    physical1,_=direct_angular_tt_covariance(
-        raw,c1*gain**2,D,method="legacy_psfr",pn=0.12,
-    )
-    physical2,_=direct_angular_tt_covariance(
-        raw,c2*gain**2,D,method="legacy_psfr",pn=0.12,
-    )
-    # Angular physical covariances are in rad² (~1e-13): an atol=1e-10
-    # would silently declare any two realistic Keck jitter values equal.
-    assert not np.allclose(physical1,physical2,rtol=1e-4,atol=1e-26)
-    # Both routes retain rad² image-motion covariance and physical
-    # Noll-normalized angular Gaussian OTF; only noise inference changes.
-    assert physical1.shape==physical2.shape==(2,2)
-    assert np.all(np.isfinite(physical1))
-    assert np.all(np.isfinite(physical2))
+    # A physically admissible synthetic test: slowly varying atmospheric
+    # image motion plus independent detector noise. The previous pure-white
+    # fixture made C_y-(1+pn)C_n non-PSD for BOTH methods and required
+    # clipping, so it could not verify the actual residual-turbulence model.
+    rng = np.random.default_rng(443)
+    count = 4096
+    frames = np.arange(count)
+    raw = np.column_stack([
+        0.16*np.sin(2*np.pi*3*frames/count)
+        + 0.05*np.cos(2*np.pi*7*frames/count),
+        0.12*np.sin(2*np.pi*5*frames/count + 0.7)
+        + 0.04*np.cos(2*np.pi*9*frames/count),
+    ]) + rng.normal(0, 0.012, size=(count, 2))
 
+    D = 10.5
+    gain = zernike_tilt_opd_per_arcsec(D)
+    c1, _ = estimate_tt_noise(
+        raw, method="van_dam", sample_rate_hz=125.0,
+        rejection_frequency_hz=np.linspace(0, 62.5, 1025),
+        rejection_transfer=np.ones(1025),
+        high_frequency_band=(0.65, 0.95), nperseg=512,
+    )
+    c2, _ = estimate_tt_noise(raw, method="gendron")
+    # Even small estimator changes must be compared in arcsec², not
+    # accidentally swallowed by an OPD/rad²-sized absolute tolerance.
+    assert not np.allclose(c1, c2, rtol=1e-4, atol=1e-10)
+    pn = 0.12
+    observed = np.cov(raw, rowvar=False, bias=True)
+    assert np.linalg.eigvalsh(observed - (1+pn)*c1).min() > 0
+    assert np.linalg.eigvalsh(observed - (1+pn)*c2).min() > 0
+    # A clipping warning is an outright test failure: we are testing the
+    # physical covariance algebra, NOT its automatic PSD repair policy.
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        physical1, _ = direct_angular_tt_covariance(
+            raw, c1*gain**2, D, method="legacy_psfr", pn=pn,
+        )
+        physical2, _ = direct_angular_tt_covariance(
+            raw, c2*gain**2, D, method="legacy_psfr", pn=pn,
+        )
+    # This validates C_y-C_n without a covariance projection.
+    expected1 = (observed-c1) * (np.pi/(180*3600))**2
+    expected2 = (observed-c2) * (np.pi/(180*3600))**2
+    np.testing.assert_allclose(physical1, expected1, rtol=1e-12, atol=1e-28)
+    np.testing.assert_allclose(physical2, expected2, rtol=1e-12, atol=1e-28)
+    assert not np.allclose(physical1, physical2, rtol=1e-6, atol=1e-27)
+    assert np.linalg.eigvalsh(physical1).min() > 0
+    assert np.linalg.eigvalsh(physical2).min() > 0
 
 
 def test_framework_cli_exposes_profiles_and_independent_switches():
