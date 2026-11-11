@@ -324,3 +324,29 @@ explicit detector calibration status, and spectral noise
 comparison uses the same W/K/P/S. No absolute physical
 jitter is certified without independent gain/transfer
 calibrations.
+
+## P4 numerical chain consolidated — source-to-OTF gate
+
+The new source-to-OTF implementation and acceptance criteria are
+documented separately in
+`docs/keck_p4_tt_angular_otf_numeric_contract.md`.
+
+It independently repeats the sensor-noise estimate directly on
+`DTTCENTROIDS` in arcsec², compares to the historic Noll OPD² route,
+then independently reconstructs the legacy and spectral physical
+covariance in rad². It checks the pixel-scale Fourier grid and the
+analytic Fourier transform of Gaussian image motion, and records
+`p4_tt_angular_chain.json` and `p4_otf_tt.npy`.
+A unit mismatch is an error, not a warning.
+
+**Important:** old n0013 P4 output folders do not contain these fields
+and are NOT retroactively validated by `--summarize-only`.
+Re-run the four ablations after updating the P4 branch to obtain a
+new `tt_angular_replay_verified_for_all_enabled_variants=true`
+status. A0 has no TT kernel by design.
+
+This changes neither the identified noise nor the nominal Gaussian
+jitter covariance; it is a numerical proof/consistency check.
+Do not claim absolute Keck calibration: quad-cell gain, detector
+photon statistics, RTC W/K/P, STRAP frame/parity and science
+path vibrations remain open.
