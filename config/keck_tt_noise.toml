@@ -1,5 +1,24 @@
 # Keck STRAP tip-tilt measurement-noise estimation.
-# Method may be "van_dam", "gendron", or "legacy_autocorrelation".
+# P4-C PROVISIONAL FRAMEWORK CHOICE (P4-A n0013 benchmark):
+#   noise=van_dam, covariance=legacy_psfr, mirror=unity,
+#   Noll angular Gaussian OTF, band 0.65-0.95 Nyquist, Welch 512.
+# This is A1: 31.58 mas RMS/axis versus 41.13 mas for the spectral
+# comparison A3 on n0013. A2 /16=7.89 mas is diagnostic, NOT physical.
+# The chosen method reduces provisional model jitter but is not a
+# calibrated Keck 2020 noise/servo truth and was not fitted to NIRC2.
+#
+# To switch methods WITHOUT modifying this file, use for example:
+#   --tt-profile spectral_comparison
+#   --tt-profile gendron_comparison
+# Or override each independently:
+#   --tt-noise-method gendron --tt-jitter-model legacy_psfr
+#   --tt-noise-method van_dam --tt-jitter-model spectral_closed_loop
+# The default source remains these TOML fields when no profile is passed.
+#
+# Noise estimators: "van_dam", "gendron", "legacy_autocorrelation".
+# The last two are exploratory on Keck LGS; none has an independent
+# absolute detector calibration. APD ideal Poisson remains an audit,
+# not a production option until gain/excess noise are calibrated.
 # The HO WFS noise estimator remains unchanged.
 [tip_tilt_noise]
 method = "van_dam"
