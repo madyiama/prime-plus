@@ -1472,6 +1472,18 @@ def main():
                 or otf.max() > 1+1e-12
                 or abs(otf[otf.shape[0]//2,otf.shape[1]//2]-1) > 1e-12):
             raise ValueError("Nonphysical TT OTF: violates DC/positivity invariants")
+        # The error-budget routine evaluates separate noise/atmospheric
+        # kernels, but diagnostics must save the TOTAL science OTF from
+        # self.dphi_tt. Checking only OTF(0)=1 would miss component reuse.
+        if not args.disable_tt_jitter:
+            expected_full = np.exp(
+                -0.5*np.asarray(model.dphi_tt, dtype=float)
+            )
+            if not np.allclose(otf, expected_full, rtol=1e-12, atol=1e-14):
+                raise ValueError(
+                    "P4 saved OTF_TT differs from the full jitter term "
+                    "used by the science PSF; inspect diagnostic side effects"
+                )
         np.save(args.output / "p4_otf_tt.npy", otf)
     stage("comparison figure", lambda: _plot_comparison(
         trs.cam.image, psf, args.output / "comparison_nirc2_psfr.png",
