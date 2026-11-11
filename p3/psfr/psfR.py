@@ -421,7 +421,7 @@ class psfR:
         # must cancel numerically; otherwise do not emit a science PSF.
         Ctheta = opd_covariance_to_angular(Ctt, self.ao.tel.D)
         angular_audit = None
-        if (initial_tt_model and str(self.trs.aoMode).upper() == 'LGS'
+        if (initial_tt_model and str(getattr(self.trs, 'aoMode', '')).upper() == 'LGS'
                 and hasattr(self.trs.tipTilt, 'slopes_arcsec')):
             from p3.aoSystem.tipTiltGeometry import zernike_tilt_opd_per_arcsec
             raw_arcsec = np.asarray(self.trs.tipTilt.slopes_arcsec, dtype=float)
