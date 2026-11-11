@@ -265,3 +265,28 @@ def test_apd_archived_angular_centroids_reproduce_same_gaussian_otf_without_extr
     # baseline kernel without the 4/D inverse mapping.
     np.testing.assert_allclose(dphi_noll_route/16,
                                dphi_direct/16, rtol=1e-13)
+
+
+def test_benchmark_records_direct_angular_chain_without_certifying_old_outputs(tmp_path):
+    analyze = _report_function()
+    root = _synthetic_four_folders(tmp_path)
+    old = analyze(root)
+    assert old["previous_output_reconstruction_needed_for_angular_audit"] is True
+    assert old["tt_angular_replay_verified_for_all_enabled_variants"] is False
+    # Reconstructed files from the corrected engine carry a separate
+    # explicit status, never inferred from the mere presence of old images.
+    for label in ("A1_legacy_physical", "A2_legacy_no16_diagnostic",
+                  "A3_spectral_physical"):
+        (root/label/"p4_tt_angular_chain.json").write_text(json.dumps({
+            "status": "numerical_chain_verified_instrument_uncalibrated",
+            "sensor_gain_independently_calibrated": False,
+            "tt_source_angle_replay": {
+                "tt_centroid_to_otf_units_verified": True
+            },
+        }))
+    new = analyze(root)
+    assert new["tt_angular_replay_verified_for_all_enabled_variants"] is True
+    assert new["previous_output_reconstruction_needed_for_angular_audit"] is False
+    assert new["results"]["A1_legacy_physical"]["tt_angular_chain"][
+        "sensor_gain_independently_calibrated"
+    ] is False
