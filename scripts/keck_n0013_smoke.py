@@ -543,6 +543,17 @@ def main():
         default=Path(__file__).resolve().parents[1] / "config/keck_tt_noise.toml",
         help="TOML file selecting the STRAP TT noise estimator",
     )
+    parser.add_argument(
+        "--tt-profile",
+        choices=("reduced_jitter", "spectral_comparison", "gendron_comparison"),
+        default=None,
+        help=(
+            "P4-C fixed STRAP recipe: reduced_jitter (van Dam + legacy "
+            "covariance, provisional default), spectral_comparison "
+            "(van Dam + W/K/P/S spectral), or gendron_comparison "
+            "(time-lag noise + legacy covariance). When omitted, use TOML."
+        ),
+    )
     parser.add_argument("--tt-noise-method",
                         choices=("van_dam", "gendron", "legacy_autocorrelation"),
                         help="Override config's TT-noise estimator")
@@ -594,7 +605,8 @@ def main():
             "HO modal covariance: strict (default) rejects significant negative "
             "eigenvalues; tiny_negative permits explicitly warned projection "
             "if both maximum and cumulative negative spectral fractions are "
-            "<= 0.001% (LGS/NGS); small_negative permits <= 0.5% (NGS only). "
+            "at most 0.001 percent (LGS/NGS); small_negative permits "
+            "at most 0.5 percent (NGS only). "
             "Neither policy validates the sensor-noise estimator."
         ),
     )
@@ -653,25 +665,64 @@ def main():
         parser.error("--r0-method jolissaint/both requires --p1-only")
     with args.config.open("rb") as conf_file:
         full_config = tomllib.load(conf_file)
-    noise_config = full_config.get("tip_tilt_noise", {})
-    tt_method = args.tt_noise_method or noise_config.get("method", "van_dam")
-    tt_band = (args.tt_noise_band if args.tt_noise_band is not None
-               else noise_config.get("high_frequency_band", [0.65, 0.95]))
-    tt_nperseg = (args.tt_welch_nperseg if args.tt_welch_nperseg is not None
-                   else noise_config.get("welch_nperseg", 512))
-    jitter_config = full_config.get("tip_tilt_jitter", {})
-    tt_jitter_model = args.tt_jitter_model or jitter_config.get("method", "legacy_psfr")
-    tt_mirror_model = args.tt_mirror_model or jitter_config.get("mirror_model", "unity")
-    tt_jitter_nperseg = (
-        args.tt_jitter_welch_nperseg if args.tt_jitter_welch_nperseg is not None
-        else jitter_config.get("welch_nperseg", tt_nperseg)
+    from p3.telemetry.ttSelection import resolve_tt_selection
+    try:
+        tt_selection = resolve_tt_selection(
+            full_config,
+            profile=args.tt_profile,
+            overrides={
+                "noise_method": args.tt_noise_method,
+                "noise_band": args.tt_noise_band,
+                "noise_welch": args.tt_welch_nperseg,
+                "covariance_method": args.tt_jitter_model,
+                "mirror_model": args.tt_mirror_model,
+                "jitter_welch": args.tt_jitter_welch_nperseg,
+            },
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
+    tt_method = tt_selection.noise_method
+    tt_band = tt_selection.noise_band
+    tt_nperseg = tt_selection.noise_welch
+    tt_jitter_model = tt_selection.covariance_method
+    tt_mirror_model = tt_selection.mirror_model
+    tt_jitter_nperseg = tt_selection.jitter_welch
+    print(
+        "[TT selection] source=", tt_selection.source,
+        ", noise=", tt_method, ", jitter=", tt_jitter_model,
+        ", mirror=", tt_mirror_model, ", band=", tt_band,
+        ", Welch=", tt_nperseg, sep="", flush=True,
     )
-    print(f"[TT noise request] method={tt_method}, band={tt_band}, Welch={tt_nperseg}",
-          flush=True)
+    if args.tt_kernel_convention == "legacy_unscaled_opd":
+        print(
+            "[TT WARNING] /16 kernel is a nonphysical historical ablation, "
+            "not a calibrated science-camera jitter model.",
+            flush=True,
+        )
     for file in (args.fits, args.sav, args.calib):
         if not file.exists():
             parser.error(f"Not found: {file}")
     args.output.mkdir(parents=True, exist_ok=True)
+    tt_selection_report = tt_selection.report()
+    tt_selection_report.update({
+        "tt_kernel_convention": args.tt_kernel_convention,
+        "tt_kernel_is_physical_noll": (
+            args.tt_kernel_convention == "noll_angular"
+        ),
+        "r0_l0_reestimated_for_tt_profile": False,
+        "ho_noise_estimator_changed_for_tt_profile": False,
+    })
+    if args.tt_kernel_convention != "noll_angular":
+        # An explicitly selected /16 kernel cannot be labelled the
+        # recommended provisional science framework even when the
+        # covariance/noise profile otherwise matches A1.
+        tt_selection_report["recommended_for_framework_default"] = False
+        tt_selection_report["method_status"] = (
+            "nonphysical_historical_kernel_ablation"
+        )
+    (args.output / "tt_selection.json").write_text(
+        json.dumps(tt_selection_report, indent=2), encoding="utf-8",
+    )
 
     from p3.telemetry.telemetryKeck import telemetryKeck
     from p3.telemetry.systemDiagnosis import systemDiagnosis
@@ -1421,6 +1472,18 @@ def main():
                 or otf.max() > 1+1e-12
                 or abs(otf[otf.shape[0]//2,otf.shape[1]//2]-1) > 1e-12):
             raise ValueError("Nonphysical TT OTF: violates DC/positivity invariants")
+        # The error-budget routine evaluates separate noise/atmospheric
+        # kernels, but diagnostics must save the TOTAL science OTF from
+        # self.dphi_tt. Checking only OTF(0)=1 would miss component reuse.
+        if not args.disable_tt_jitter:
+            expected_full = np.exp(
+                -0.5*np.asarray(model.dphi_tt, dtype=float)
+            )
+            if not np.allclose(otf, expected_full, rtol=1e-12, atol=1e-14):
+                raise ValueError(
+                    "P4 saved OTF_TT differs from the full jitter term "
+                    "used by the science PSF; inspect diagnostic side effects"
+                )
         np.save(args.output / "p4_otf_tt.npy", otf)
     stage("comparison figure", lambda: _plot_comparison(
         trs.cam.image, psf, args.output / "comparison_nirc2_psfr.png",
@@ -1467,9 +1530,11 @@ def main():
         ),
         "tt_noise_method_requested": tt_method,
         "tt_noise_method": effective_tt_noise_method,
-        "tt_jitter_model_requested": args.tt_jitter_model or jitter_config.get(
-            "method", "legacy_psfr"
-        ),
+        "tt_selection": tt_selection_report,
+        "tt_selection_profile": tt_selection.profile,
+        "tt_selection_source": tt_selection.source,
+        "tt_kernel_is_physical_noll": model.tt_kernel_convention == "noll_angular",
+        "tt_jitter_model_requested": tt_selection.covariance_method,
         "tt_jitter_policy_note": model_policy_note,
         "ngs_tt_units_independently_verified": (
             False if str(trs.aoMode).upper() == "NGS" else None

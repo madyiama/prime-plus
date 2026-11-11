@@ -508,7 +508,12 @@ class psfR:
             self, 'tt_kernel_dphi_multiplier_vs_noll', 1.0
         )
         dphi_used = legacy_multiplier * dphi
-        self.otf_tt = np.exp(-dphi_used/2)
+        # get_error_breakdown() calls this function with component-specific
+        # covariances (noise and atmosphere). Do not replace a previously
+        # computed science TT OTF with the final diagnostic component OTF.
+        # Keep standalone explicit-covariance use working for synthetic tests.
+        if initial_tt_model or not hasattr(self, 'otf_tt'):
+            self.otf_tt = np.exp(-dphi_used/2)
         if initial_tt_model:
             self.tiptilt_diagnostics.update({
                 'tt_axis_camera_angle_deg': tt_axis_angle,
