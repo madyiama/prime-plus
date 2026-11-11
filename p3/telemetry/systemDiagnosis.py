@@ -159,6 +159,16 @@ class systemDiagnosis:
         if (str(self.trs.aoMode).upper() == 'LGS'
                 and hasattr(self.trs.tipTilt, 'slopes_arcsec')):
             from p3.aoSystem.tipTiltGeometry import zernike_tilt_opd_per_arcsec
+            # In legacy telemetryKeck, decimation slices .slopes but not
+            # .slopes_arcsec and does not recompute TT sample-rate/filters.
+            # Never silently compare unlike samples or alias the TT spectrum.
+            if (np.asarray(self.trs.tipTilt.slopes_arcsec).shape
+                    != np.asarray(self.trs.tipTilt.slopes).shape):
+                raise ValueError(
+                    "P4 STRAP requires undecimated matched angular/OPD "
+                    "telemetry; current Keck decimation drops the raw "
+                    "centroid alignment and invalidates the TT transfer."
+                )
             if self.noiseMethod == 'nonoise':
                 native_noise = np.zeros((2, 2))
             else:
