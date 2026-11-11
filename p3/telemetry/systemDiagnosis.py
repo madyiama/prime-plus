@@ -152,6 +152,56 @@ class systemDiagnosis:
             tt_noise_nperseg=tt_noise_nperseg, tt_mirror_model=tt_mirror_model,
         )
 
+        # P4: a second, native-arcsec estimate of the EXACT SAME sensor-noise
+        # model. The estimator is homogeneous in amplitude and must agree
+        # with the legacy RMS-Noll OPD estimate after unit conversion.
+        # This is a numerical calibration check, NOT APD optical-gain evidence.
+        if (str(self.trs.aoMode).upper() == 'LGS'
+                and hasattr(self.trs.tipTilt, 'slopes_arcsec')):
+            from p3.aoSystem.tipTiltGeometry import zernike_tilt_opd_per_arcsec
+            if self.noiseMethod == 'nonoise':
+                native_noise = np.zeros((2, 2))
+            else:
+                rejection = self.trs.ttloop.tf.rtf
+                if tt_noise_method == 'van_dam' and tt_mirror_model != 'unity':
+                    from p3.telemetry.ttClosedLoop import from_p3_tiptilt_loop
+                    rejection = from_p3_tiptilt_loop(
+                        self.trs.ttloop, mirror_model=tt_mirror_model,
+                    ).sensitivity
+                native_noise, _ = estimate_tt_noise(
+                    self.trs.tipTilt.slopes_arcsec,
+                    method=tt_noise_method,
+                    sample_rate_hz=self.trs.ttloop.freq,
+                    rejection_frequency_hz=self.trs.ttloop.tf.freq,
+                    rejection_transfer=rejection,
+                    high_frequency_band=tt_noise_high_band,
+                    nperseg=tt_noise_nperseg,
+                )
+            gain = zernike_tilt_opd_per_arcsec(self.trs.tel.D)
+            noise_opd_as_arcsec2 = np.asarray(
+                self.trs.tipTilt.Cn_tt, dtype=float,
+            )/gain**2
+            error = np.max(np.abs(native_noise-noise_opd_as_arcsec2))
+            scale = max(
+                float(np.max(np.abs(native_noise))),
+                float(np.max(np.abs(noise_opd_as_arcsec2))), 1e-30,
+            )
+            if error > 2e-9*scale:
+                raise ValueError(
+                    "P4 native-angular van Dam/Gendron noise and P3 Noll OPD "
+                    f"noise are inconsistent by {error/scale:.6e} relative"
+                )
+            self.trs.tipTilt.Cn_tt_arcsec2 = native_noise
+            self.trs.tipTilt.noise_estimation_diagnostics[
+                'p4_native_arcsec_noise_replay'
+            ] = {
+                'units': 'arcsec^2_sensor_input',
+                'covariance_arcsec2': native_noise.tolist(),
+                'relative_OPD_replay_error': float(error/scale),
+                'unit_chain_numerically_verified': True,
+                'photon_noise_and_optical_gain_calibrated': False,
+            }
+
         if np.any(self.trs.wfs.Cn_ao):
             Cnn = np.diag(self.trs.wfs.Cn_ao)
             Cnn = Cnn[Cnn!=0]
