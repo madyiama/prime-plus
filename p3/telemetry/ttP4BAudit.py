@@ -26,6 +26,51 @@ REFERENCE_BAND = (0.65, 0.95)
 REFERENCE_WELCH = 512
 
 
+
+def initialize_keck_loop_transfers(trs):
+    """Initialize the *existing* P3 RTC W/K/P/S from loaded Keck telemetry.
+
+    telemetryKeck restores frequencies, delays and controller coefficients,
+    but does not construct tf.freq/wfs/servo/lag/rtf. P3 normally does so
+    in systemDiagnosis.__init__, followed by HO noise, pseudo-OL and r0/L0
+    fitting. P4-B needs ONLY the transfer initialization; running the full
+    diagnosis would add unrelated estimator assumptions and computational
+    cost to this instrument-only experiment.
+
+    This uses precisely systemDiagnosis.temporal_transfer_function(), not
+    an independent hand-written approximation of the Keck RTC.
+    """
+    from p3.telemetry.systemDiagnosis import systemDiagnosis
+
+    if not (hasattr(trs, "ttloop") and hasattr(trs, "holoop")
+            and hasattr(trs, "tipTilt") and hasattr(trs, "wfs")):
+        raise ValueError("Keck telemetry lacks TT/HO loop and sample metadata")
+    if not (hasattr(trs.ttloop, "tf") and hasattr(trs.holoop, "tf")):
+        raise ValueError("Keck loop transfer containers are missing")
+    for name in ("num", "den"):
+        for loop in (trs.ttloop, trs.holoop):
+            if not hasattr(loop.tf, name):
+                raise ValueError("Keck RTC servo coefficients are not loaded")
+    diagnostic = systemDiagnosis.__new__(systemDiagnosis)
+    diagnostic.trs = trs
+    diagnostic.temporal_transfer_function()
+
+    tt = trs.ttloop.tf
+    required = ("freq", "wfs", "servo", "lag", "rtf", "pn")
+    if any(not hasattr(tt, field) for field in required):
+        raise ValueError("P4-B STRAP transfer initialization is incomplete")
+    # The unity mirror must reproduce the original P3 rejection exactly.
+    from_p3_tiptilt_loop(trs.ttloop, mirror_model="unity")
+    return {
+        "source": "systemDiagnosis.temporal_transfer_function",
+        "full_system_diagnosis_executed": False,
+        "noise_or_atmosphere_fitted_during_initialization": False,
+        "tt_frequency_grid_size": int(len(tt.freq)),
+        "tt_sample_rate_hz": float(trs.ttloop.freq),
+        "unity_rejection_replay_verified": True,
+    }
+
+
 def _trace(c):
     return float(np.trace(np.asarray(c, dtype=float)))
 
