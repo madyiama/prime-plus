@@ -106,7 +106,8 @@ def psf_aperture_metrics(psf, radii_px=(3, 5, 10, 20)):
         raise ValueError("PSF contains no flux")
     p /= np.sum(p)
     y, x = np.indices(p.shape)
-    c = (p.shape[0]-1)/2
+    # FFT-centred PSFs place the zero-shift pixel at N//2 for even N.
+    c = p.shape[0]//2
     r = np.hypot(x-c, y-c)
     mx = float(np.sum(x*p))
     my = float(np.sum(y*p))
