@@ -129,3 +129,37 @@ def test_changing_noise_only_changes_legacy_residual_not_angular_otf_formula():
     assert physical1.shape==physical2.shape==(2,2)
     assert np.all(np.isfinite(physical1))
     assert np.all(np.isfinite(physical2))
+
+
+
+def test_framework_cli_exposes_profiles_and_independent_switches():
+    import subprocess
+    import sys
+
+    script=Path(__file__).resolve().parents[1]/"scripts"/"keck_n0013_smoke.py"
+    completed=subprocess.run(
+        [sys.executable,str(script),"--help"],
+        capture_output=True,text=True,check=False,timeout=30,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "--tt-profile" in completed.stdout
+    assert "reduced_jitter" in completed.stdout
+    assert "spectral_comparison" in completed.stdout
+    assert "gendron_comparison" in completed.stdout
+    assert "--tt-noise-method" in completed.stdout
+    assert "--tt-jitter-model" in completed.stdout
+
+
+def test_selection_json_can_be_serialized_for_reproduction():
+    import json
+
+    choice=resolve_tt_selection(
+        load_config(),profile="spectral_comparison",
+        overrides={"noise_method":"gendron"},
+    )
+    copied=json.loads(json.dumps(choice.report(),allow_nan=False))
+    assert copied["profile"] == "spectral_comparison"
+    assert copied["covariance_method"] == "spectral_closed_loop"
+    assert copied["noise_method"] == "gendron"
+    assert copied["selection_source"].startswith("named_profile")
+    assert copied["instrument_calibrated"] is False
