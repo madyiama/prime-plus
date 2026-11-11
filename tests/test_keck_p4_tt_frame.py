@@ -136,6 +136,12 @@ def _synthetic_four_folders(root):
             "ao_mode": "LGS",
             "forward_parameters_diagnostics": {
                 "atmosphere_layers": 7, "r0_model_m": 0.43,
+                "layer_strengths_m_to_minus_5_over_3": [0.2, 0.3],
+            },
+            "atmosphere_reconstruction_audit": {
+                "fitted_L0_m": 31.0,
+                "atmosphere_layer_weights": [0.5, 0.5],
+                "atmosphere_layer_heights_m": [0., 12000.],
             },
             "psf_reference_wavelength_m": 2.05e-6,
             "p3_pupil_resampling": "physical_binary",
