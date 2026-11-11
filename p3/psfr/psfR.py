@@ -449,6 +449,9 @@ class psfR:
                 ttloop=self.trs.ttloop,
                 mirror_model=self.tt_mirror_model,
                 nperseg=self.tt_welch_nperseg,
+                native_noise_arcsec2=getattr(
+                    self.trs.tipTilt, 'Cn_tt_arcsec2', None,
+                ),
             )
             angular_audit = assert_equivalent_angular_covariances(
                 Ctt, direct_cov, self.ao.tel.D,
