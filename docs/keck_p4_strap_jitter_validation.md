@@ -227,3 +227,100 @@ merge P4 as an instrument calibration.
    TTM commands. Compare isolated-star or
    astrometrically fitted binary *with PSF fixed*; no free
    empirical TT amplitude.
+
+## P4-D: photon-counting APD cross-check and factor-16 clarification
+
+**Re-use existing PR7**, do not independently reinvent its noise
+model: `p3/telemetry/ttApdNoise.py` and
+`scripts/keck_strap_apd_audit.py` reconstruct the normalized
+four-quadrant `APDCOUNTS` to `DTTCENTROIDS` through archived
+`APD_IMAT` and `APD_SKY_BACK`.
+
+The 2017 Keck telemetry reference explicitly labels
+`DTTCENTROIDS` as **arcsec** and `APDCOUNTS` as detector
+**counts**, not as verified photoelectrons. The n0013
+centroid-reproduction RMS is ~1.49e-8/1.46e-8 arcsec
+under the archived mapping. This proves numerical agreement
+with the recorded transformation, **not absolute optical
+centroid gain**.
+
+The earlier PR7 n0013 reference comparison (all covariances
+traces in 1e-12 m² Zernike RMS OPD):
+- van Dam sensor-input: 2.905;
+- Gendron temporal: 3.101 (signal-location caution);
+- APD first-order ideal counting: 2.494;
+- APD Poisson Monte Carlo: 2.547;
+- observed centroid (loop-filtered): 3.228.
+
+Mean APD raw counts ~446.5/frame and background-subtracted
+net counts ~223.6/frame. Even after subtracting the mean
+background, background photon shot noise remains. Ideal APD
+noise is ~16.5% **lower** than van Dam, so under the same
+loop transfer it predicts **larger**, not smaller, residual
+atmospheric TT. This cannot explain away the broad A1 PSF
+unless the real APD excess noise/counter gain or instrument
+model differs from the ideal Poisson hypothesis.
+
+For a quantitative comparison, propagate per-frame count
+variances through
+`q_j = sum_i A_{ji} (C_i-B_i)/sum_i (C_i-B_i)` and
+`y=Mq`. Its Jacobian is
+`dq_j/dC_i=(A_{ji}-q_j)/F`, so
+`C_y=J diag(Var(C_i))J.T`. Parameters
+`effective_photoelectrons_per_count`,
+`excess_noise_factor`, read/dark and sky-estimate noise
+must be measured **independently**, not fitted to the
+science PSF. Compare APD and van Dam at the same sensor
+input location; filter both through `S(f)` before
+comparing to measured closed-loop centroid covariance.
+
+The correct TT kernel can be written with **only angular
+covariance** in the NIRC2 image frame:
+`OTF_TT(f_ang)=exp[-2*pi²*f_ang.T*C_theta*f_ang]`.
+The archived centroid is a measured angular offset;
+no Zernike conversion is physically required to construct
+this OTF. PR2's apparent factor 16 arose only because
+the *intermediate* covariance was converted to Noll RMS
+OPD via `a=D*theta/4`, so the inverse `theta=4*a/D`
+must be applied in the normalized-baseline OTF.
+Omitting this inverse creates an effective four-times
+smaller angle RMS. It does NOT prove that STRAP on-sky
+noise is 4x the recorded centroid motion.
+P4 regression test `test_apd_archived_angular_centroids_reproduce_same_gaussian_otf_without_extra_factor`
+checks both pathways.
+
+**Sensitivity, not a calibration proposal:** holding
+the current legacy `trace(C_y)=3.227752e-12` fixed,
+to reduce `trace(C_y-C_n)` by 16 would require
+`trace(C_n)` ~3.20756e-12, an increase of ~10.43%
+over the van Dam estimate 2.90473e-12. This illustrates
+why APD gain/excess-noise uncertainty can dominate the
+inferred jitter. One must not tune the noise floor to
+achieve the A2 image.
+
+Re-run PR7's independent check with the **same n0013** pair:
+```bash
+uv run --with pytest python -m pytest -q \
+  tests/test_keck_strap_apd_noise.py tests/test_keck_p4_tt_frame.py
+uv run python scripts/keck_strap_apd_audit.py \
+  --fits "/path/to/n0013.fits" \
+  --sav "/path/to/n0013_LGS_trs.sav" \
+  --calib "p3/aoSystem/data/KECK_CALIBRATION" \
+  --mirror-model unity \
+  --output results/n0013_P4_APD
+```
+Outputs: `strap_apd_noise_audit.json`,
+`strap_apd_noise_comparison.png` and
+`strap_apd_noise_report.md`. Repeat with the same
+acquisition and `--mirror-model ragland_2016_keck_ii`
+in a separate folder as a sensitivity test of the RTC
+plant model, **not** validation of 2016 coefficients
+for 2020.
+
+Acceptance: direct angular and Noll OPD implementations
+agree numerically, raw APD count-to-centroid transformation
+reproduces archived centroids, photon noise estimates include
+explicit detector calibration status, and spectral noise
+comparison uses the same W/K/P/S. No absolute physical
+jitter is certified without independent gain/transfer
+calibrations.
