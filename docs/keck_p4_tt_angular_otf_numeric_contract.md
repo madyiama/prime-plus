@@ -208,3 +208,55 @@ Une fois les tests numériques passés, le prochain
 chantier sera de vérifier **le bruit et les transferts
 de boucle**, sans ajouter de facteur libre pour
 forcer l'accord avec la PSF d'une binaire.
+
+
+## 7. Échec réel sur n0013 : conversion float32 → OPD (11 novembre 2026)
+
+Le premier benchmark P4 sur `n0013` s'arrêtait dans
+`systemDiagnosis`, y compris pour `A0_no_tt`, avec :
+
+```
+P4 native-angular van Dam/Gendron noise and P3 Noll OPD
+noise are inconsistent by 2.269615e-08 relative
+```
+
+Cette différence était petite mais supérieure au seuil
+strict `2e-9`; elle n'indiquait **pas** un problème
+physique dans le bruit du détecteur.
+
+Cause reproductible : `scipy.io.readsav` peut fournir
+`DTTCENTROIDS` en `float32`. Dans NumPy, multiplier
+un tel tableau par un scalaire Python `float` de gain
+mètres/arcsec peut **conserver le résultat en float32**,
+puis la soustraction de la moyenne introduit des
+arrondis supplémentaires. En parallèle, l'estimateur
+du bruit natif P4 convertissait les données en float64.
+L'homogénéité mathématique attendue des deux estimateurs
+était alors perdue à ~2e-8 relatif.
+
+Un essai indépendant avec 4 096 échantillons synthétiques
+`float32` et Welch 512 a donné ~`2.51e-8` relatif
+pour le chemin historique, contre une égalité au niveau
+des arrondis machine pour la promotion avant multiplication.
+
+Correctif P4 :
+- `strap_centroids_arcsec_float64` conserve les valeurs
+  archivées, en les copiant en float64 avant tout gain
+  et avant centrage ;
+- `telemetryKeck.restoringTelemetry` utilise ce tableau
+  pour `slopes_arcsec` et `slopes` ;
+- nouveau test avec archive synthétique float32,
+  van Dam sur angles et OPD, comparaison stricte
+  `<2e-9`, ainsi que contrôle que la version
+  historique en float32 reproduit l'écart.
+
+**Le seuil de validation n'a pas été relâché.**
+La conversion ne peut pas récupérer la précision déjà
+perdue lors de l'enregistrement initial en float32,
+mais évite une seconde quantification artificielle
+dans le modèle. Cette correction d'arrondi ne valide
+ni le gain optique APD ni le budget de bruit physique.
+
+Les quatre variantes doivent être relancées sur les mêmes
+données avec le code corrigé. Les tests réels et la CI
+de ce commit restent à confirmer.
