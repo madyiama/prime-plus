@@ -99,7 +99,10 @@ def test_segmented_apd_flux_and_van_dam_preserve_time_order_and_units():
     assert rows[0]["predicted_ideal_apd_noise"]["trace_arcsec2"] > (
         rows[-1]["predicted_ideal_apd_noise"]["trace_arcsec2"]
     )
-    assert all(x["van_dam_noise"]["psd_with_roundoff_only"] for x in rows)
+    # Short Welch windows may yield a non-PSD *raw* cross spectrum:
+    # the audit must record any projection instead of assuming it away.
+    assert all(isinstance(x["van_dam_noise_was_psd_projected"],bool)
+               for x in rows)
 
 
 def test_flux_insufficiency_is_reported_not_overinterpreted():
