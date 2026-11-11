@@ -285,13 +285,31 @@ def main():
             with (folder/"p4_console.log").open("w", encoding="utf-8") as log:
                 exit_code = subprocess.call(cmd, stdout=log, stderr=subprocess.STDOUT)
             if exit_code != 0:
+                # The former runner swallowed the underlying Python traceback
+                # and only displayed a generic RuntimeError. Keep the full
+                # file, but surface its last lines immediately to the user.
+                import collections
+                with (folder/"p4_console.log").open(
+                    "r", encoding="utf-8", errors="replace"
+                ) as source:
+                    last_lines = list(collections.deque(source, maxlen=80))
+                log_tail = "".join(last_lines).strip()
                 (root/"p4_failed_variant.json").write_text(json.dumps({
                     "variant": label, "return_code": exit_code,
                     "log_file": str(folder/"p4_console.log"),
+                    "log_tail": log_tail,
                     "scientific_policy": "Do not clip non-PSD physical TT covariance",
                 }, indent=2), encoding="utf-8")
+                print(
+                    f"\\n[P4] {label} failed (exit {exit_code}); "
+                    f"last {len(last_lines)} log lines from "
+                    f"{folder/'p4_console.log'}:\\n{log_tail}\\n",
+                    file=sys.stderr, flush=True,
+                )
                 raise RuntimeError(
-                    f"{label} failed (exit {exit_code}). Inspect {folder/'p4_console.log'}"
+                    f"{label} failed (exit {exit_code}). The original "
+                    "traceback is printed above and preserved in "
+                    f"{folder/'p4_console.log'}."
                 )
     report = summarize_existing_outputs(root)
     outfile = root/"p4_tt_ablation_report.json"
