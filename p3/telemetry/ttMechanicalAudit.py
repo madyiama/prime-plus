@@ -223,11 +223,12 @@ def _spectral(u,gd,bad,runs,*,matrix,intercept,lag,fs,nperseg=1024,split=0.7):
     out={
         "status":"ok",
         "segment_role":role,
+        "welch_windows_are_statistically_independent":False,
         "nperseg_requested":original,
         "nperseg_effective":nseg,
         "sample_rate_hz":float(fs),
         "timestamp_contiguous_block_count":len(selected),
-        "total_independent_welch_windows":sum(segment_counts),
+        "total_welch_windows_50_percent_overlap":sum(segment_counts),
         "axes":[],
     }
     for axis in range(2):
