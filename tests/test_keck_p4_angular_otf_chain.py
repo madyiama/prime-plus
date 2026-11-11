@@ -233,3 +233,96 @@ def test_strap_cam_parity_changes_orientation_not_variance():
     # Both are equal along circularly averaged power only when the grid
     # is rotation symmetric; 90-degree rotation swaps the covariance axes.
     np.testing.assert_allclose(base,rotated.T,rtol=2e-13,atol=2e-13)
+
+
+def test_spectral_tt_covariance_direct_angles_equals_opd_intermediate():
+    """An LTI/Welch covariance is homogeneous in squared signal units."""
+    from p3.telemetry.ttClosedLoop import (
+        physical_tt_covariance_from_telemetry,
+        closed_loop_transfers,
+    )
+    N = 4096
+    fs = 600.0
+    f = np.linspace(0, fs/2, 257)
+    W = np.ones(len(f))
+    K = np.full(len(f), 0.04)
+    P = np.ones(len(f))
+    model = closed_loop_transfers(f, sensor=W, controller=K, plant=P)
+    tf = NS(freq=f, wfs=W, servo=K, lag=P,
+            rtf=model.sensitivity)
+    loop = NS(tf=tf, freq=fs)
+    raw = _synthetic_keck_centroids(N)
+    D = 10.5
+    gain = zernike_tilt_opd_per_arcsec(D)
+    samples_opd = (raw-raw.mean(axis=0))*gain
+    noise_opd = np.diag([1e-6, 2e-6])*gain**2
+    _,_,original,_ = physical_tt_covariance_from_telemetry(
+        samples_opd, noise_opd, loop, mirror_model="unity", nperseg=512,
+    )
+    direct, diag = direct_angular_tt_covariance(
+        raw, noise_opd, D, method="spectral_closed_loop",
+        ttloop=loop, mirror_model="unity", nperseg=512,
+    )
+    assert diag["method"] == "spectral_closed_loop"
+    assert_equivalent_angular_covariances(original, direct, D, rtol=2e-10)
+
+
+def test_psfr_actual_lgs_centroid_replay_marks_physical_validation_separately():
+    """The full legacy P4 function takes raw arcsec and checks its Noll path."""
+    raw = _synthetic_keck_centroids(1024)
+    D = 10.5
+    gain = zernike_tilt_opd_per_arcsec(D)
+    opd = (raw-raw.mean(axis=0))*gain
+    fake = psfR.__new__(psfR)
+    fake.ao = NS(tel=NS(D=D), cam=NS(psInMas=9.942))
+    fake.freq = _freq(n=32, D=D)
+    fake.trs = NS(
+        aoMode="LGS", tel=NS(D=D, pupilAngle=46.76723),
+        tipTilt=NS(slopes_arcsec=raw, slopes=opd,
+                   Cn_tt=np.diag([1e-6, 2e-6])*gain**2,
+                   nExp=len(raw), command_units_verified=False),
+        ttloop=NS(tf=NS(pn=0.12)),
+    )
+    fake.tt_covariance_mode="legacy_psfr"
+    fake.tt_mirror_model="unity"
+    fake.tt_welch_nperseg=512
+    fake.tt_axis_angle_deg=None
+    fake.tt_axis_parity="native"
+    fake.tt_kernel_dphi_multiplier_vs_noll=1.0
+    sf=fake.jitter_phase_structure_function()
+    assert sf.shape == (fake.freq.nOtf, fake.freq.nOtf)
+    assert fake.tiptilt_diagnostics["tt_source_angle_replay"][
+        "tt_centroid_to_otf_units_verified"
+    ] is True
+    assert fake.tiptilt_diagnostics["tt_source_angle_replay"][
+        "angular_route_relative_error"
+    ] < 2e-9
+    assert fake.tiptilt_diagnostics["tt_otf_zero_lag"] == pytest.approx(1.0)
+    assert fake.tiptilt_diagnostics["tt_otf_max"] <= 1+1e-14
+    assert fake.tiptilt_diagnostics["tt_source_angle_replay"][
+        "calibration_of_instrument_gain_verified"
+    ] is False
+
+
+def test_psfr_rejects_corrupted_centroid_opd_unit_chain():
+    raw = _synthetic_keck_centroids(512)
+    D = 10.5
+    gain = zernike_tilt_opd_per_arcsec(D)
+    fake = psfR.__new__(psfR)
+    fake.ao = NS(tel=NS(D=D),cam=NS(psInMas=9.942))
+    fake.freq = _freq(n=32,D=D)
+    fake.trs = NS(
+        aoMode="LGS", tel=NS(D=D,pupilAngle=0.),
+        tipTilt=NS(slopes_arcsec=raw,
+                   slopes=(raw-raw.mean(axis=0))*gain*1.01,
+                   Cn_tt=np.zeros((2,2)), nExp=len(raw)),
+        ttloop=NS(tf=NS(pn=0.0)),
+    )
+    fake.tt_covariance_mode="legacy_psfr"
+    fake.tt_mirror_model="unity"
+    fake.tt_welch_nperseg=512
+    fake.tt_axis_angle_deg=None
+    fake.tt_axis_parity="native"
+    fake.tt_kernel_dphi_multiplier_vs_noll=1.0
+    with pytest.raises(ValueError,match="angular-to-OPD conversion inconsistent"):
+        fake.jitter_phase_structure_function()
