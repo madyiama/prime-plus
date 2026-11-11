@@ -25,7 +25,7 @@ def _case(n=8192, *, lag=2, gap=False, change_matrix=False):
     ])
     gauges=np.empty((n,3))
     for j in range(n):
-        effective=a*(1.17 if change_matrix and j>=n//2 else 1.)
+        effective=a*(1.40 if change_matrix and j>=n//2 else 1.)
         gauges[j]=u[max(j-lag,0)]@effective
     common=2e-5+3e-5*np.sin(2*np.pi*np.arange(n)/n)
     gauges+=common[:,None]
