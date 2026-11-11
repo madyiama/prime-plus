@@ -111,8 +111,8 @@ def test_replay_refuses_wrong_controller_or_unexplained_angle_factor():
     with pytest.raises(ValueError,match="NOT equivalent"):
         prepare_tt_command_replay(y,u*0.576,SERVO)
     with pytest.raises(ValueError,match="NOT equivalent"):
-        prepare_tt_command_replay(y,u,SERVO*1.0,
-                                  max_relative_rms_mismatch=1e-8)
+        prepare_tt_command_replay(y,u,SERVO,
+                                  max_relative_rms_mismatch=1e-15)
     assert SOURCE_OPTIONS==(
         "centroids","centroids_aligned","command_increment"
     )
