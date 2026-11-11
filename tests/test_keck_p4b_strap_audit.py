@@ -13,6 +13,7 @@ from p3.telemetry.ttClosedLoop import (
 from p3.telemetry.ttP4BAudit import (
     BANDS, WELCH_SIZES, MIRRORS,
     loop_identity_report, sensitivity_audit, flux_segment_audit,
+    initialize_keck_loop_transfers,
 )
 
 
@@ -137,3 +138,56 @@ def test_prespecified_grid_cannot_silently_be_replaced_with_one_model():
     assert BANDS == ((0.55,0.85),(0.65,0.95),(0.75,0.95))
     assert WELCH_SIZES == (256,512,1024)
     assert MIRRORS == ("unity","ragland_2016_keck_ii")
+
+
+
+def _raw_keck_rtc_stub(n=4096):
+    """Keck-like data immediately after telemetryKeck, before P3 diagnosis."""
+    def raw_loop(fs, latency, gain):
+        return NS(
+            freq=fs, lat=latency,
+            tf=NS(
+                num=np.array([gain,0.,0.,0.]),
+                den=np.array([0.,0.,0.]),
+            ),
+        )
+    return NS(
+        wfs=NS(nExp=n),
+        tipTilt=NS(nExp=n),
+        holoop=raw_loop(500.,0.003,0.20),
+        ttloop=raw_loop(125.,0.008,0.26),
+    )
+
+
+def test_p4b_initializes_keck_transfers_without_running_atmosphere_diagnosis():
+    trs=_raw_keck_rtc_stub()
+    assert not hasattr(trs.ttloop.tf,"freq")
+    assert not hasattr(trs.holoop.tf,"freq")
+    # Unlike the full systemDiagnosis init, this stub has NO atmosphere,
+    # DM influence maps or covariance fitting state.
+    assert not hasattr(trs,"atm")
+    result=initialize_keck_loop_transfers(trs)
+    assert result["source"] == "systemDiagnosis.temporal_transfer_function"
+    assert not result["full_system_diagnosis_executed"]
+    assert not result["noise_or_atmosphere_fitted_during_initialization"]
+    assert result["unity_rejection_replay_verified"]
+    assert len(trs.ttloop.tf.freq) == trs.tipTilt.nExp//2
+    assert np.all(np.diff(trs.ttloop.tf.freq) > 0)
+    assert np.isfinite(trs.ttloop.tf.rtf).all()
+    np.testing.assert_allclose(
+        from_p3_tiptilt_loop(trs.ttloop,"unity").sensitivity,
+        trs.ttloop.tf.rtf,
+        rtol=1e-8,atol=1e-9,
+    )
+    # Calling twice must be deterministic and neither compute r0 nor
+    # mutate source centroids, because there are none in the stub.
+    first=trs.ttloop.tf.rtf.copy()
+    initialize_keck_loop_transfers(trs)
+    np.testing.assert_array_equal(trs.ttloop.tf.rtf,first)
+
+
+def test_p4b_keck_transfer_initialization_fails_without_rtc_servo():
+    trs=_raw_keck_rtc_stub()
+    del trs.ttloop.tf.num
+    with pytest.raises(ValueError,match="RTC servo coefficients"):
+        initialize_keck_loop_transfers(trs)
