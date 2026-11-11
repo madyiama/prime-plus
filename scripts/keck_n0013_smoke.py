@@ -702,16 +702,25 @@ def main():
         if not file.exists():
             parser.error(f"Not found: {file}")
     args.output.mkdir(parents=True, exist_ok=True)
+    tt_selection_report = tt_selection.report()
+    tt_selection_report.update({
+        "tt_kernel_convention": args.tt_kernel_convention,
+        "tt_kernel_is_physical_noll": (
+            args.tt_kernel_convention == "noll_angular"
+        ),
+        "r0_l0_reestimated_for_tt_profile": False,
+        "ho_noise_estimator_changed_for_tt_profile": False,
+    })
+    if args.tt_kernel_convention != "noll_angular":
+        # An explicitly selected /16 kernel cannot be labelled the
+        # recommended provisional science framework even when the
+        # covariance/noise profile otherwise matches A1.
+        tt_selection_report["recommended_for_framework_default"] = False
+        tt_selection_report["method_status"] = (
+            "nonphysical_historical_kernel_ablation"
+        )
     (args.output / "tt_selection.json").write_text(
-        json.dumps({
-            **tt_selection.report(),
-            "tt_kernel_convention": args.tt_kernel_convention,
-            "tt_kernel_is_physical_noll": (
-                args.tt_kernel_convention == "noll_angular"
-            ),
-            "r0_l0_reestimated_for_tt_profile": False,
-            "ho_noise_estimator_changed_for_tt_profile": False,
-        }, indent=2), encoding="utf-8",
+        json.dumps(tt_selection_report, indent=2), encoding="utf-8",
     )
 
     from p3.telemetry.telemetryKeck import telemetryKeck
@@ -1508,7 +1517,7 @@ def main():
         ),
         "tt_noise_method_requested": tt_method,
         "tt_noise_method": effective_tt_noise_method,
-        "tt_selection": tt_selection.report(),
+        "tt_selection": tt_selection_report,
         "tt_selection_profile": tt_selection.profile,
         "tt_selection_source": tt_selection.source,
         "tt_kernel_is_physical_noll": model.tt_kernel_convention == "noll_angular",
