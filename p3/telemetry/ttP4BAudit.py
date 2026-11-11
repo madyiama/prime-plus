@@ -64,10 +64,6 @@ def loop_identity_report(model, sample_rate_hz):
     s = model.sensitivity
     l = model.loop
     closure = float(np.max(np.abs(s*(1+l)-1)))
-    expected = (
-        model.measured_disturbance == model.measured_disturbance
-    )  # unused numerically; all identities below are explicit
-    del expected
     identities = {
         "S_times_1_plus_WPK_equals_one": closure,
         "measured_disturbance_equals_W_times_S": float(
