@@ -37,17 +37,17 @@ def _plot(audit,destination):
     import matplotlib.pyplot as plt
     controller=audit["command_increment_audit"]
     noise=audit["gain_sensitivity"]
-    fig,axs=plt.subplots(1,3,figsize=(15,4),constrained_layout=True)
+    fig,axs=plt.subplots(2,2,figsize=(13,9),constrained_layout=True)
     lag=controller["lag_scan"]
-    axs[0].plot([s["lag_frames"] for s in lag],
+    axs[0,0].plot([s["lag_frames"] for s in lag],
                 [s["r2_free_test"] for s in lag],"o-",label="fitted 2×2")
-    axs[0].plot([s["lag_frames"] for s in lag],
+    axs[0,0].plot([s["lag_frames"] for s in lag],
                 [s["r2_expected_controller_test"] for s in lag],
                 "s-",label="nominal 0.1×I")
-    axs[0].set(xlabel="Command vs centroid lag [frames]",ylabel="Held-out R²",
+    axs[0,0].set(xlabel="Command vs centroid lag [frames]",ylabel="Held-out R²",
                title="Command increments vs recorded STRAP")
-    axs[0].legend()
-    axs[0].grid(alpha=.25)
+    axs[0,0].legend()
+    axs[0,0].grid(alpha=.25)
     trials=noise["trials"]
     bands=sorted(set(tuple(v["band_fraction_of_nyquist"]) for v in trials))
     for band in bands:
@@ -60,23 +60,36 @@ def _plot(audit,destination):
                 np.sqrt(max(0,v["sensor_noise_covariance_recorded_arcsec2"][axis][axis]))*1000
                 for v in sub
             ]
-            axs[1].plot(gs,noise_rms,"o-",label=f"{band[0]:.2f}–{band[1]:.2f} Nyq, ax {axis}")
+            axs[1,0].plot(gs,noise_rms,"o-",
+                          label=f"{band[0]:.2f}–{band[1]:.2f} Nyq, ax {axis}")
             variance_fraction=[
                 v["predicted_filtered_noise_fraction_per_axis"][axis]
                 for v in sub
             ]
-            axs[2].plot(gs,variance_fraction,"o-",
-                        label=f"{band[0]:.2f}–{band[1]:.2f} Nyq, ax {axis}")
-    axs[1].set(xlabel="Assumed g_opt (NOT estimated)",
+            axs[1,1].plot(gs,variance_fraction,"o-",
+                          label=f"{band[0]:.2f}–{band[1]:.2f} Nyq, ax {axis}")
+            conditional_rms=[
+                (v["conditional_jitter_band_sensitivity"]
+                 ["residual_band_rms_axes_conditional_mas"] or [float("nan")]*2)[axis]
+                for v in sub
+            ]
+            axs[0,1].plot(gs,conditional_rms,"o-",
+                          label=f"{band[0]:.2f}–{band[1]:.2f} Nyq, ax {axis}")
+    axs[0,1].set(xlabel="Assumed g_opt (NOT estimated)",
+                 ylabel="Band-limited residual RMS [conditional mas]",
+                 title="Hypothetical jitter (P=one-frame unity only)")
+    axs[1,0].set(xlabel="Assumed g_opt (NOT estimated)",
                ylabel="Sensor noise RMS [recorded mas]",
                title="van Dam noise is gain-dependent")
-    axs[2].set(xlabel="Assumed g_opt (NOT estimated)",
+    axs[1,1].set(xlabel="Assumed g_opt (NOT estimated)",
                ylabel="Filtered noise fraction of measured variance",
                title="Conditional loop model (not sky jitter)")
-    for ax in axs[1:]:
+    for ax in (axs[0,1],axs[1,0],axs[1,1]):
         ax.grid(alpha=.25)
         ax.legend(fontsize="xx-small")
-    fig.suptitle("P4-E statistical audit — NO optical gain fitted and NO science PSF used")
+    fig.suptitle(
+        "P4-E TT sensitivity — NOT a calibrated sky jitter / optical gain fit"
+    )
     fig.savefig(destination,dpi=160)
     plt.close(fig)
 
@@ -139,8 +152,12 @@ def main():
             std=np.sqrt(np.maximum(0,np.diag(
                 trial["sensor_noise_covariance_recorded_arcsec2"]
             )))*1000
+            cond=trial["conditional_jitter_band_sensitivity"]
+            conditional=cond["residual_band_rms_axes_conditional_mas"]
             print(f"  assumed g={trial['assumed_effective_optical_gain']:.2f}, "
-                  f"van Dam sensor RMS in RECORDED mas={std.round(3)}; "
+                  f"van Dam sensor RMS in RECORDED mas={std.round(3)}, "
+                  f"conditional band jitter RMS mas={conditional}, "
+                  f"band={cond['frequency_interval_hz']}, "
                   f"warnings={len(trial['warnings'])}")
     if not args.no_plot:
         _plot(audit,args.output/"tt_statistical_audit.png")
