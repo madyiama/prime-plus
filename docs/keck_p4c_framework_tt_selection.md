@@ -119,7 +119,7 @@ Pour comparer *sur la même acquisition* :
 
 La sortie ajoute `tt_selection.json` dès le début de chaque run,
 avec paramètres, provenance, méthode physique active, et avertissements
-de calibration. Le fichier final `smoke_summary.json` récapitule
+de calibration. Le fichier final `metadata.json` récapitule
 la méthode effective après politique LGS/NGS.
 
 Le noyau `legacy_unscaled_opd` est réservé à la comparaison
@@ -132,7 +132,7 @@ archivés déjà exprimés en angle.
 Clôturer la **capacité logicielle** lorsque :
 
 - les tests P1/P2/P3/P4-A et P4-C passent sur Mac et CI quand disponible ;
-- les trois profils reconstruisent les PSF voulues, ou signalent sans
+- les trois profils reconstruisent les PSF attendues, ou signalent sans
   ambiguïté une covariance non PSD dans une méthode expérimentale ;
 - A1 reproduit n0013 sans modification du `r0/L0`, de la pupille ou
   de l'OTF ; A3 correspond à la référence spectrale P4-A ;
