@@ -142,3 +142,53 @@ def test_smoke_cli_exposes_tt_slope_source():
     assert result.returncode==0,result.stderr
     assert "--tt-slope-source" in result.stdout
     assert "command_increment" in result.stdout
+
+
+def test_ab_harness_detects_psf_discrepancies_and_preserves_metadata(tmp_path):
+    import json
+    from scripts.keck_p4f_tt_source_ab import compare_tt_psfr_outputs
+    a,b=tmp_path/"centroids_aligned",tmp_path/"command_increment"
+    for folder,source in ((a,"centroids_aligned"),(b,"command_increment")):
+        folder.mkdir()
+        metadata={
+            "tt_slope_source":source,
+            "input_fits":"/archive/n0120.fits",
+            "input_sav":"/archive/n0120_LGS_trs.sav",
+            "tt_noise_method":"van_dam",
+            "tt_jitter_covariance_method":"legacy_psfr",
+            "p3_pupil_resampling":"physical_binary",
+            "tt_kernel_convention":"noll_angular",
+            "psf_reference_wavelength_m":1.53e-6,
+        }
+        (folder/"metadata.json").write_text(json.dumps(metadata))
+        (folder/"tt_command_replay.json").write_text(
+            json.dumps({
+                "first_frame_removed":True,
+                "relative_rms_error_vs_centroids":1e-7,
+                "covariance_relative_frobenius_error":1e-7,
+            })
+        )
+        (folder/"tt_noise_diagnostics.json").write_text(
+            json.dumps({"noise_covariance_m2":
+                        [[1e-13,0],[0,1e-13]]})
+        )
+        (folder/"tiptilt_diagnostics.json").write_text(json.dumps({}))
+        arr=np.ones((16,16),dtype=float)
+        arr[8,8]=10.
+        np.save(folder/"telemetry_only_psf.npy",arr)
+        np.save(folder/"p4_otf_tt.npy",np.ones((16,16)))
+    report=compare_tt_psfr_outputs(
+        a,b,output=tmp_path/"ab",make_figure=False
+    )
+    assert report["psf_arrays_close_at_requested_tolerance"]
+    assert report["psf_relative_l2_difference"]==0
+    assert report["tt_otf_relative_l2_difference"]==0
+
+    altered=np.load(b/"telemetry_only_psf.npy")
+    altered[8,8]*=1.2
+    np.save(b/"telemetry_only_psf.npy",altered)
+    report=compare_tt_psfr_outputs(
+        a,b,output=tmp_path/"ab",make_figure=False
+    )
+    assert not report["psf_arrays_close_at_requested_tolerance"]
+    assert report["psf_relative_l2_difference"]>1e-4
