@@ -71,11 +71,14 @@ elle-même l'amplitude TT à calibrer ; il ne faut pas utiliser un
    de mesure avec **van Dam**, en re-calculant le facteur
    de rejet supposé pour chaque `g`, puis en refaisant
    l'estimation pour trois bandes hautes fréquences.
-5. Les diagnostics rapportent uniquement la covariance du bruit
-   et la composante atmosphérique **dans les unités de
-   centroïdes enregistrées (arcsec² nominales)**. Aucune covariance
-   physique `C_e` n'est publiée tant que `P` et `g`
-   ne sont pas identifiés. Aucun `g` n'est ajusté ou classé.
+5. Les diagnostics rapportent la covariance du bruit et la composante
+   atmosphérique **dans les unités de centroïdes enregistrées
+   (arcsec² nominales)**. En complément, la fonction
+   `ttConditionalCovariance.py` calcule une **famille de covariances
+   résiduelles conditionnelles bande limitée**, pour chaque `g`
+   supposé, selon le modèle mécanique provisoire ci-dessous.
+   Elles ne sont PAS des covariances physiques calibrées du miroir Keck ;
+   aucune n'est sélectionnée ni injectée dans le moteur PSF-R.
 
 ### Hypothèses strictes du scan de bruit
 
@@ -105,6 +108,37 @@ diagnostics originaux sont étiquetés OPD m² pour leur usage P3.
 Dans cet audit, l'entrée est directement `DTTCENTROIDS`
 en arcsec, donc les valeurs sorties sont explicitement
 étiquetées **arcsec² enregistrés**, pas m².
+
+### Covariance conditionnelle longue pose : identité spectrale
+
+Sous les hypothèses spécifiées et en supposant `Phi_dd` et `Phi_nn`
+indépendants, les deux PSD satisfont :
+
+```
+Phi_yy = g² |S|² Phi_dd + |S|² Phi_nn
+Phi_ee = |S|² Phi_dd + |T|² Phi_nn
+S = (1-q)/(1+(g*k-1)*q)
+T = -q*k/(1+(g*k-1)*q)
+```
+
+En éliminant `Phi_dd`, nous obtenons exactement :
+
+```
+Phi_ee = Phi_yy/g² + (|T|² - |S|²/g²) Phi_nn
+```
+
+L'intégration fournit `C_e(g)` par bande, en arcsec² conditionnels,
+avec **aucune projection PSD**. Le code conserve les valeurs propres
+négatives et le nombre de bins non physiques de `Phi_yy-|S|²Phi_nn`.
+Cette formule évite le problème de division par `S(f=0)=0`.
+
+**Avertissement longue pose :** l'intégration Welch couvre seulement
+`[fs/nperseg, fs/2]`, pas la bande proche de DC. Le terme turbulent
+lent, potentiellement important sur une exposition longue, est absent.
+Il serait trompeur d'assimiler cette intégrale à la covariance absolue
+de jitter longue pose. Les valeurs sont des *tests de sensibilité*.
+Pour une PSF prédictive, il faudra compléter la basse fréquence et
+étalonner les transferts optiques/mécaniques.
 
 ## Commande
 
