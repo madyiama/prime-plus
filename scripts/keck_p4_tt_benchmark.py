@@ -135,6 +135,23 @@ def summarize_existing_outputs(root):
     tr2 = a2["camera_jitter"]["trace_rad2"]
     if not np.isclose(tr1, tr2, rtol=1e-10, atol=1e-26):
         raise ValueError("Legacy kernel ablation changed covariance")
+    for label, row in out.items():
+        # The A2 comparison keeps the same inferred *physical covariance*
+        # but deliberately applies 1/16 of the Noll structure function.
+        # Since a Gaussian OTF exponent scales as sigma_theta^2, its
+        # actual displayed kernel corresponds to sigma_theta/4.
+        multiplier = (
+            0.0625 if row["tt_kernel"] == "legacy_unscaled_opd" else 1.0
+        )
+        inferred = row["camera_jitter"]
+        row["tt_kernel_dphi_multiplier_vs_noll"] = multiplier
+        row["kernel_effective_rms_axis_mas"] = (
+            None if inferred is None
+            else float(inferred["rms_per_axis_equivalent_mas"] * np.sqrt(multiplier))
+        )
+        row["kernel_is_physical_noll_convention"] = (
+            row["tt_kernel"] == "noll_angular"
+        )
     return {
         "status": "model_only_ablation_complete",
         "all_same_observation_and_forward_atmosphere": True,
@@ -158,6 +175,12 @@ def _figures(root, rows):
     import matplotlib.pyplot as plt
 
     fig, axes = plt.subplots(2, 2, figsize=(10, 10), constrained_layout=True)
+    short_title = {
+        "A0_no_tt": "A0 - sans jitter",
+        "A1_legacy_physical": "A1 - TT legacy, noyau Noll",
+        "A2_legacy_no16_diagnostic": "A2 - noyau /16 (diagnostic)",
+        "A3_spectral_physical": "A3 - TT spectral, noyau Noll",
+    }
     for ax, (label, row) in zip(axes.ravel(), rows.items()):
         psf = _model_psf(root/label/"telemetry_only_psf.npy")
         c = psf.shape[0]//2
@@ -165,9 +188,13 @@ def _figures(root, rows):
         ax.imshow(np.log10(np.maximum(crop, 1e-7)),
                   vmin=-7, vmax=-1.4, origin="lower", cmap="magma")
         peak = row["psf"]["normalized_peak"]
-        sig = row["camera_jitter"]
-        rms = "off" if sig is None else f'{sig["rms_per_axis_equivalent_mas"]:.1f} mas'
-        ax.set_title(f"{label}\\nTT rms/axis {rms}; model peak {peak:.4g}")
+        rms_eff = row["kernel_effective_rms_axis_mas"]
+        rms = "off" if rms_eff is None else f"{rms_eff:.1f} mas"
+        ax.set_title(
+            f"{short_title[label]}" + "\\n"
+            + f"Noyau effectif {rms} RMS/axe | pic {peak:.4g}",
+            fontsize=10,
+        )
         ax.set_xticks([])
         ax.set_yticks([])
     fig.suptitle("P4 STRAP: same-acquisition telemetry-only PSFs; no fit")
