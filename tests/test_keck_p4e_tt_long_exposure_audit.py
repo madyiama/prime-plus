@@ -6,6 +6,9 @@ algebraically redundant command increments.
 import numpy as np
 import pytest
 
+from scipy.integrate import trapezoid
+
+from p3.telemetry.ttConditionalCovariance import conditional_residual_covariance
 from p3.telemetry.ttLongExposureAudit import (
     audit_command_increments,
     ideal_integrator_sensor_noise_response,
@@ -104,6 +107,13 @@ def test_van_dam_reestimated_for_each_gain_and_band_without_gain_fit():
         assert vals.shape==(2,2)
         assert np.isfinite(vals).all()
         assert np.linalg.eigvalsh(vals).min()>-1e-12
+        conditional=trial["conditional_jitter_band_sensitivity"]
+        assert conditional["status"]==(
+            "conditional_band_limited_unverified_instrument_plant"
+        )
+        assert not conditional["filter_plant_and_command_absolute_scale_calibrated"]
+        assert not conditional["welch_low_frequency_leakage_not_included"] is False
+        assert conditional["frequency_interval_hz"][0]>0
 
 
 def test_mismatched_input_or_timestamps_fail_not_give_jitter():
@@ -114,3 +124,55 @@ def test_mismatched_input_or_timestamps_fail_not_give_jitter():
         audit_command_increments(y,u,t[:-1],SERVO)
     with pytest.raises(ValueError,match="max_lag"):
         audit_command_increments(y,u,t,SERVO,max_lag=0)
+
+
+def test_conditional_covariance_integral_matches_independent_discrete_psd():
+    """No hidden g² factors, no noise double subtraction, no PSD repair."""
+    fs=500.
+    f=np.linspace(0,fs/2,513)
+    g=0.8
+    k=0.1
+    cn=np.array([[0.0001,0.00002],[0.00002,0.00014]])
+    q=np.exp(-2j*np.pi*f/fs)
+    den=1+(g*k-1)*q
+    S=(1-q)/den
+    T=-q*k/den
+    pn=2*cn/fs
+    # A valid physical 2x2 incoming-tilt spectrum.
+    cd=np.array([[0.0008,0.0001],[0.0001,0.0006]])
+    pd=cd[:,:,None]/(1+(f/15)**2)[None,None,:]
+    py=g*g*np.abs(S)[None,None,:]**2*pd+(
+        np.abs(S)[None,None,:]**2*pn[:,:,None]
+    )
+    expected_pe=np.abs(S)[None,None,:]**2*pd+(
+        np.abs(T)[None,None,:]**2*pn[:,:,None]
+    )
+    result=conditional_residual_covariance(
+        f,py,cn,sampling_hz=fs,controller_gain=k,
+        optical_gain=g
+    )
+    fit=f>=f[1]
+    expected=trapezoid(expected_pe[:,:,fit],x=f[fit],axis=-1)
+    np.testing.assert_allclose(
+        result["residual_band_covariance_conditional_true_arcsec2"],
+        expected,rtol=1e-12,atol=1e-18
+    )
+    assert result["band_covariance_psd"]
+    assert result["atmospheric_measured_spectral_bins_negative"]==0
+    assert result["no_psd_projection"]
+    assert not result["filter_plant_and_command_absolute_scale_calibrated"]
+
+
+def test_conditional_covariance_rejects_invalid_sensor_noise():
+    f=np.linspace(0,250,513)
+    py=np.zeros((2,2,len(f)))
+    with pytest.raises(ValueError,match="Sensor noise must be PSD"):
+        conditional_residual_covariance(
+            f,py,np.diag([0.1,-0.01]),
+            sampling_hz=500.,controller_gain=.1,optical_gain=1.
+        )
+    with pytest.raises(ValueError,match="Unstable"):
+        conditional_residual_covariance(
+            f,py,np.eye(2)*0.01,
+            sampling_hz=500.,controller_gain=.1,optical_gain=0.
+        )
