@@ -566,6 +566,18 @@ def main():
         ),
     )
     parser.add_argument(
+        "--tt-axis-angle-deg", type=float, default=None,
+        help=("P4 STRAP-axis to camera-frame rotation hypothesis in degrees. "
+              "If omitted, reproduce historical coupling to pupilAngle. "
+              "Not an instrument calibration."),
+    )
+    parser.add_argument(
+        "--tt-axis-parity", choices=("native", "flip_x", "flip_y"),
+        default="native",
+        help=("P4 STRAP sensor-axis parity hypothesis, independent of "
+              "the NIRC2 pupil-mask parity."),
+    )
+    parser.add_argument(
         "--tt-mirror-model",
         choices=("unity", "ragland_2016_keck_ii"),
         help="TT actuator model; overrides TOML",
@@ -977,6 +989,8 @@ def main():
         tt_welch_nperseg=tt_jitter_nperseg,
         ho_covariance_policy=args.ho_covariance_policy,
         tt_kernel_convention=args.tt_kernel_convention,
+        tt_axis_angle_deg=args.tt_axis_angle_deg,
+        tt_axis_parity=args.tt_axis_parity,
     ))
 
     # Telescope applies PupilResampling to the archived pupil at OTF build
@@ -1163,6 +1177,38 @@ def main():
     psf = np.asarray(stage("psfR forward",
                            lambda: model(forward_parameters))).squeeze()
     np.save(args.output / "telemetry_only_psf.npy", psf)
+    # P4 compares the same model-only outputs for all TT ablations. A
+    # three-bin spectral cube is collapsed by sum, as for the smoke figure.
+    from p3.aoSystem.ttFrame import (
+        psf_aperture_metrics, angular_covariance_metrics,
+    )
+    p4_psf = psf.sum(axis=-1) if psf.ndim == 3 else psf
+    p4_psf_metrics = psf_aperture_metrics(p4_psf)
+    p4_ttcov = getattr(model, 'tt_model_cov', None)
+    p4_angle = (
+        float(model.trs.tel.pupilAngle) if args.tt_axis_angle_deg is None
+        else float(args.tt_axis_angle_deg)
+    )
+    p4_cov_metrics = (
+        angular_covariance_metrics(p4_ttcov, float(model.ao.tel.D),
+                                   p4_angle, args.tt_axis_parity)
+        if (p4_ttcov is not None and not args.disable_tt_jitter) else None
+    )
+    p4_metrics = {
+        'source': 'telemetry-only PSF and conditional STRAP covariance',
+        'psf': p4_psf_metrics,
+        'tt_jitter_enabled': bool(not args.disable_tt_jitter),
+        'tt_model': tt_jitter_model,
+        'tt_kernel_convention': args.tt_kernel_convention,
+        'tt_axis_angle_deg': p4_angle,
+        'tt_axis_parity': args.tt_axis_parity,
+        'tt_axis_angle_uses_legacy_pupil': args.tt_axis_angle_deg is None,
+        'camera_angular_covariance': p4_cov_metrics,
+        'no_science_image_fitting': True,
+    }
+    (args.output / "p4_tt_metrics.json").write_text(
+        json.dumps(p4_metrics, indent=2, allow_nan=False), encoding="utf-8"
+    )
     print("PSF shape:", psf.shape, "min/max:", np.nanmin(psf), np.nanmax(psf))
     print("Error breakdown:")
     for key, value in model.wfe.items():
@@ -1365,6 +1411,10 @@ def main():
         "p3_model_pupil_diagnostics": p3_model_pupil,
         "massdimm_diagnostics": massdimm_diagnostics,
         "tt_kernel_convention": model.tt_kernel_convention,
+        "p4_tt_axis_angle_deg": p4_angle,
+        "p4_tt_axis_parity": args.tt_axis_parity,
+        "p4_tt_axis_uses_legacy_pupil": args.tt_axis_angle_deg is None,
+        "p4_tt_metrics": p4_metrics,
         "tt_kernel_phase_structure_multiplier_vs_noll": (
             model.tt_kernel_dphi_multiplier_vs_noll
         ),
