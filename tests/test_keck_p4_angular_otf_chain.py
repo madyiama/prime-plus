@@ -435,3 +435,28 @@ def test_explicit_tt_covariance_without_mode_uses_no_telemetry_replay():
     assert np.isfinite(dphi).all()
     assert dphi[dphi.shape[0]//2,dphi.shape[1]//2] == pytest.approx(0.0)
     assert fake.otf_tt.max() == pytest.approx(1.0)
+
+
+def test_legacy_tt_covariance_mock_without_ao_mode_keeps_non_psd_diagnostic():
+    # Scientific stubs may contain only a noise-subtracted OPD covariance,
+    # without raw LGS telemetry or aoMode. They must not be treated as
+    # Keck LGS archive samples. Existing negative-covariance warnings
+    # and the audit "uncalibrated" status remain intact.
+    raw=np.array([[1e-6, 0],[-1e-6,0],[0,1e-6],[0,-1e-6]])
+    fake=psfR.__new__(psfR)
+    fake.trs=NS(
+        tel=NS(pupilAngle=0.0),
+        tipTilt=NS(slopes=raw,nExp=4,Cn_tt=np.eye(2)*5e-13),
+        ttloop=NS(tf=NS(pn=0.1)),
+    )
+    fake.ao=NS(tel=NS(D=10.5))
+    fake.freq=_freq(n=16)
+    fake.tt_covariance_mode="legacy_psfr"
+    fake.tt_axis_angle_deg=None
+    fake.tt_axis_parity="native"
+    fake.tt_kernel_dphi_multiplier_vs_noll=1.0
+    with pytest.warns(RuntimeWarning,match="not positive-semidefinite"):
+        sf=fake.jitter_phase_structure_function()
+    assert np.isfinite(sf).all()
+    assert fake.tiptilt_diagnostics["negative_variance_projected"]
+    assert fake.tiptilt_diagnostics["tt_source_angle_replay"] is None
