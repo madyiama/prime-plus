@@ -310,8 +310,12 @@ def _old_focal(tel, atm, lgs, coef, norm):
     return nnp.sqrt(var*(tel.D/atm.r0)**(5/3))*atm.wvl*1e9/2/nnp.pi
 
 
+# The historical `_variance` name is a legacy alias of the same
+# piston-and-tilt-removed WFE model (Hardy/Sasiela). Its former 0.425
+# coefficient and missing 0.423 normalization were corrected in the
+# production model; never regress the model to satisfy the old formula.
 _FUNCS = [
-    (aniso.focal_anisoplanatism_variance, 0.425, 1.0),
+    (aniso.focal_anisoplanatism_variance, 0.452, 0.423),
     (aniso.focal_anisoplanatism_wfe, 0.452, 0.423),
 ]
 _H = [0.0, 500.0, 2000.0, 8000.0, 20000.0]
@@ -342,9 +346,16 @@ def test_focal_aniso_variance_increases_when_lgs_drops_below_layer(func, coef, n
 
 
 @pytest.mark.parametrize('func,coef,norm', _FUNCS)
-def test_focal_aniso_matches_old_formula_small_ratio(func, coef, norm):
+def test_focal_aniso_matches_hardy_piston_tilt_removed_small_ratio(func, coef, norm):
     args = _stand_ins([0.0, 500.0, 2000.0], [0.5, 0.3, 0.2], 90000.0)
     assert func(*args) == pytest.approx(_old_focal(*args, coef, norm), rel=1e-12)
+
+
+def test_legacy_variance_name_is_exact_alias_of_wfe():
+    args = _stand_ins([0.0, 500.0, 2000.0], [0.5, 0.3, 0.2], 90000.0)
+    assert aniso.focal_anisoplanatism_variance(*args) == (
+        aniso.focal_anisoplanatism_wfe(*args)
+    )
 
 
 @pytest.mark.parametrize('func,coef,norm', _FUNCS)
