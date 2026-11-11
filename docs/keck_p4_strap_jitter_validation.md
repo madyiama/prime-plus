@@ -151,3 +151,79 @@ The four-variant plot alone is not a physical calibration.
 
 Until then PR P4 remains draft. Do not update P1 r0/L0 or P3
 pupil rotation to compensate TT disagreement.
+
+## P4 n0013 initial on-sky telemetry run — quantitative interpretation (11/11/2026)
+
+**Input:** one n0013 FITS/SAV, same Git SHA `0cb4982`, NIRC2
+LGS, `n-layer=7`, `r0_model_m=0.65062548` at science
+2.055501 µm, `L0_tel=13.12937 m`, `pupilAngle=84.92398 deg`,
+binary pupil native, van Dam + mirror unity, no source fitting.
+Report uploaded by the project user; physical gain not calibrated.
+
+| Variant | TT angular RMS/axis (mas) | Kernel effective RMS/axis (mas) | Peak flux per pixel | peak/A0 | EE r3 |
+|---|---:|---:|---:|---:|---:|
+| A0 disabled | n/a | n/a | 0.0199346 | 1 | 0.333957 |
+| A1 legacy, Noll | 31.5789 | 31.5789 | 0.00568719 | 0.28529 | 0.140409 |
+| A2 legacy, /16 | 31.5789 | **7.89473** | 0.0172174 | 0.86369 | 0.305711 |
+| A3 spectral, Noll | 41.1348 | 41.1348 | 0.00391403 | 0.19634 | 0.102633 |
+
+The A1/A2 identical covariance proves the difference is **only the
+OTF Noll-kernel normalization**, not the underlying TT estimator. The
+A2 31.6 mas label in the original graph was misleading: its displayed
+blur corresponds to *one quarter* this RMS. P4 now writes both and
+fixes panel-title line breaks, without changing PSFs. **Do not promote
+A2 as a physically calibrated solution just because it resembles an
+observed image.**
+
+Legacy STRAP covariance trace:
+`C_y=3.22775226685e-12 m²`,
+`C_n=2.90472962723e-12 m²` (89.992% of measured),
+`C_model=C_y-C_n=3.2302274804e-13 m²` (no PSD projection).
+A 5% relative change in the assumed Cn trace corresponds to
+`1.45236e-13 m²`, **45% of the inferred legacy physical
+variance trace**. This is a local *error-propagation illustration*,
+not a justified +/-5% experimental noise error bar. The actual
+matrix eigenvalues must be checked before accepting each sensitivity.
+
+The measured WFS PSD integrals have predicted filtered-noise
+fractions x=89.2343%, y=87.4997%; negative
+`PSD_measured-PSD_predicted_noise` in 40.856% and
+38.521% of frequency bins, respectively. Finite Welch variance
+can produce negative residual bins; do **not** clip them or
+reinterpret the signed difference as a directly measured image
+motion PSD.
+
+Spectral physical covariance:
+`trace=5.48096547791e-13 m²`, **1.697 x A1**,
+comprising `4.02493883378e-13` atmospheric (73.43%)
+and `1.45602664412e-13` propagated sensor noise (26.57%).
+The A3 noise model propagates W/K/P and is explicitly
+uncalibrated for Keck 2020. It being broader than A1
+does not establish whether either is physically correct.
+
+**Decision:** benchmark identifies extreme *noise-subtraction
+sensitivity* plus a legitimate *16x kernel exponent* contrast.
+It does NOT yet measure a real TT displacement independently, nor
+quantify the binary PSF's true single-source core width. Do not
+merge P4 as an instrument calibration.
+
+### Next discriminating checks
+
+1. Inspect raw `tt_noise_psd.png` and complete
+   `tt_noise_diagnostics.json`: high-frequency plateau, band
+   0.65–0.95 Nyquist, stationarity, detrending, Welch sampling.
+2. Re-estimate van Dam noise with a **predeclared** set of bands
+   (0.55–0.85, 0.65–0.95, 0.75–0.95) and Welch
+   segment lengths 256/512/1024 **without choosing a value
+   based on image agreement**. Report each covariance, negative
+   spectrum fraction, physical RMS and any non-PSD failure.
+3. Check STRAP optical centroid gain, APD normalization,
+   real mirror P, WFS integration W and controller K on the
+   n0013 2020 RTC; evaluate the sensitivity to unity vs
+   independently calibrated Ragland mirror, using consistent
+   rejection transfer in both noise and physical jitter.
+4. On at least two more matched acquisitions, check sensor-noise
+   stability and/or derive TT from independently calibrated
+   TTM commands. Compare isolated-star or
+   astrometrically fitted binary *with PSF fixed*; no free
+   empirical TT amplitude.
