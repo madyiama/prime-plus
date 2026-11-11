@@ -1381,6 +1381,47 @@ def main():
     (args.output / "tiptilt_diagnostics.json").write_text(
         json.dumps(tt, indent=2), encoding="utf-8",
     )
+    # P4: persist the independent angular replay and exact TT OTF
+    # separately from noise-model goodness. This is a numerical/unit
+    # validation, NOT an optical-gain or closed-loop calibration.
+    angular_path = tt.get("tt_source_angle_replay")
+    if (trs.aoMode == "LGS" and not args.disable_tt_jitter
+            and (not angular_path
+                 or not angular_path.get("tt_centroid_to_otf_units_verified"))):
+        raise ValueError(
+            "P4 LGS TT lacks validated DTTCENTROIDS -> angular covariance path"
+        )
+    angular_report = {
+        "source": "Keck B.DTTCENTROIDS in arcsec",
+        "otf_domain": "angular spatial frequencies [cycles/radian]",
+        "covariance_domain": "angular image-motion covariance [radian^2]",
+        "tt_model": tt_jitter_model,
+        "tt_kernel_convention": args.tt_kernel_convention,
+        "tt_kernel_multiplier": model.tt_kernel_dphi_multiplier_vs_noll,
+        "tt_source_angle_replay": angular_path,
+        "otf_math_route_relative_error":
+            tt.get("tt_otf_direct_angular_noll_relative_error"),
+        "otf_zero_frequency":
+            tt.get("tt_otf_zero_lag"),
+        "otf_transmission_min": tt.get("tt_otf_min"),
+        "otf_transmission_max": tt.get("tt_otf_max"),
+        "sensor_gain_independently_calibrated": False,
+        "loop_plant_independently_calibrated": False,
+        "status": (
+            "numerical_chain_verified_instrument_uncalibrated"
+            if angular_path is not None else "tt_ablated_or_unavailable"
+        ),
+    }
+    (args.output / "p4_tt_angular_chain.json").write_text(
+        json.dumps(angular_report, indent=2, allow_nan=False), encoding="utf-8"
+    )
+    if getattr(model, "otf_tt", None) is not None:
+        otf = np.asarray(model.otf_tt, dtype=float)
+        if (not np.isfinite(otf).all() or otf.min() < 0
+                or otf.max() > 1+1e-12
+                or abs(otf[otf.shape[0]//2,otf.shape[1]//2]-1) > 1e-12):
+            raise ValueError("Nonphysical TT OTF: violates DC/positivity invariants")
+        np.save(args.output / "p4_otf_tt.npy", otf)
     stage("comparison figure", lambda: _plot_comparison(
         trs.cam.image, psf, args.output / "comparison_nirc2_psfr.png",
         dataset_label=f"Keck/NIRC2 {args.fits.name} — {trs.aoMode}",
