@@ -1,50 +1,62 @@
-# P3 - fourier PSF
+# PRIME+ — PSF reconstruction (P3 core)
 
-P3 is a collection of libraries for Adaptive Optics (AO) Point Spread Function (PSF) modeling, simulation, fitting and reconstruction.
+Research framework for AO telemetry-based point spread function
+reconstruction, initially for Keck II/NIRC2. This refactor removes the
+DeepLoop and PSFAO21 research packages; the legacy P3 engine is retained
+until an equivalent, validated functional pipeline replaces it.
 
-## Keck/NIRC2 telemetry PSF-R V1 (MADYIAMA)
+## Scientific baseline: Keck/NIRC2 V1
 
-The stable **numerical** baseline for Keck LGS/NIRC2 is described in
+The stable **numerical** Keck LGS baseline is described in
 [docs/psfr_keck_v1_release_acceptance.md](docs/psfr_keck_v1_release_acceptance.md).
-The single locked recipe lives in [config/psfr_keck_v1.toml](config/psfr_keck_v1.toml)
-and its end-to-end gate is [scripts/keck_psfr_v1_e2e.py](scripts/keck_psfr_v1_e2e.py).
-
-For one real observation:
+Use the locked recipe [config/psfr_keck_v1.toml](config/psfr_keck_v1.toml)
+and end-to-end gate [scripts/keck_psfr_v1_e2e.py](scripts/keck_psfr_v1_e2e.py).
 
 ```bash
 uv run --with pytest python -m pytest -q tests/test_keck_psfr_v1_release.py
-uv run python scripts/keck_psfr_v1_e2e.py \\
-  --fits /path/to/n0120.fits \\
-  --sav /path/to/n0120_LGS_trs.sav \\
-  --calib p3/aoSystem/data/KECK_CALIBRATION \\
+uv run python scripts/keck_psfr_v1_e2e.py \
+  --fits /path/to/n0120.fits \
+  --sav /path/to/n0120_LGS_trs.sav \
+  --calib p3/aoSystem/data/KECK_CALIBRATION \
   --output results/psfr_v1_acceptance
 ```
 
-This baseline uses **van Dam (65–95% Nyquist, Welch 512), legacy_psfr,
-unity TT plant, Noll angular OTF, 7 atmospheric layers, physical Keck pupil
-resampling and strict HO covariance**. Angular anisokinetism is already
-modelled by P3 `dani_tt`; do **not** inject it into the NGS residual jitter.
-No science-image fitting or unverified STRAP optical gain correction is applied.
-Instrument-specific absolute TT calibration and HO atmospheric inference
-remain scientifically provisional. Exploratory audit scripts P4-B–G are not
-part of the production recipe.
+Nominal V1: van Dam STRAP noise (65–95% Nyquist, Welch 512),
+legacy_psfr TT covariance, unity TT plant, Noll angular TT OTF,
+7-layer atmosphere, physical Keck pupil, and strict HO PSD checks.
+No science-image fitting or unverified instrument gain calibration is
+applied. This is **not** a validated absolute Keck STRAP calibration.
 
+## Package boundaries (transition state)
 
-The list of libraries is:
+- `p3/psfr` — telemetry reconstruction engine + pure PSF product helpers.
+- `p3/telemetry` — instrument telemetry and diagnostics.
+- `p3/aoSystem` — optical physics, Fourier operators, pupil and filters
+  currently required by PSF-R; not yet narrowed to only necessary code.
+- `p3/psfFitting` — retained legacy fitting utilities; future refactor
+  will separate physical PSF production from stellar image rendering.
+- `scripts/` — reproducible Keck end-to-end validation and diagnostics.
 
-* [aoSystem](https://github.com/astro-tiptop/P3/tree/main/p3/aoSystem) → The main purpose of this library is to model an AO PSF. It is an analytical simulator based on a Fourier appoach.
-Supported wavefront sensors are Shack-Hartmann and Pyramid.
-Several kind of AO are supported: single conjugate AO (SCAO), single laser AO (SLAO), laser tomography AO (LTAO), ground layer AO (GLAO), multi conjugate AO (MCAO), but only one kind of guide star can be used (natural or laser).
-In [TIPTOP](https://github.com/astro-tiptop/TIPTOP) it is used to compute the so-called high order PSF.<br>
-Examples and tests can be found in [p3/aoSystem/testing](https://github.com/astro-tiptop/P3/tree/main/p3/aoSystem/testing).<br>
-Examples of parameters file can be found in [p3/aoSystem/parFiles](https://github.com/astro-tiptop/P3/tree/main/p3/aoSystem/parFiles).
-* [deepLoop](https://github.com/astro-tiptop/P3/tree/main/p3/deepLoop)
-* [psfFitting](https://github.com/astro-tiptop/P3/tree/main/p3/psfFitting) → This library can be used to fit parameters on a PSF model (aoSystem/fourierModel or psfao21).<br>
-Examples and tests can be found in [p3/testing](https://github.com/astro-tiptop/P3/tree/main/p3/testing).
-* [psfao21](https://github.com/astro-tiptop/P3/tree/main/p3/psfao21) → This library can be used to model with a small number of parameters the AO PSF. Its main purpose is PSF fitting.<br>
-**Note**: This library **requires** the maoppy repo from [gitlab.lam.fr/lam-grd-public/maoppy](https://gitlab.lam.fr/lam-grd-public/maoppy).<br>
-Examples and tests can be found in [p3/testing](https://github.com/astro-tiptop/P3/tree/main/p3/testing).
-* [psfr](https://github.com/astro-tiptop/P3/tree/main/p3/psfr) → The main purpose of this library is to reconstruct PSF from telemetry data or from image fitting.<br>
-Examples and tests can be found in [p3/testing](https://github.com/astro-tiptop/P3/tree/main/p3/testing).
-* [telemetry](https://github.com/astro-tiptop/P3/tree/main/p3/telemetry) → This library is used to manage telemetry data for PSFR.<br>
-Examples and tests can be found in [p3/testing](https://github.com/astro-tiptop/P3/tree/main/p3/testing).
+[Functional architecture, scientific contracts and performance plan](docs/psfr_core_refactor.md).
+
+### Flux-normalized PSF product (new, representation only)
+
+```python
+from p3.psfr.products import normalize_psf
+
+# Input is a forward *kernel* with zero background, e.g.
+# legacy P3's (y,x,source,wavelength) or (y,x,wavelength).
+product = normalize_psf(psf_cube)
+assert abs(product.image.sum() - 1.0) < 1e-12
+```
+
+Spectral weights in the input are retained, not re-applied. The legacy
+chromatic PSF model still needs independent physical validation.
+For performance baseline (synthetic Vii only):
+
+```bash
+uv run python scripts/bench_psfr_modes2otf.py --trials 5
+```
+
+The original P3 project authors and BSD-3-Clause license remain credited
+in the package metadata and LICENSE file.
