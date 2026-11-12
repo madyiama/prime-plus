@@ -25,7 +25,7 @@ dynamic = ["version"]
 
 [tool.setuptools.packages.find]
 namespaces = true
-include = ["p3*"]
+include = ["p3*", "scripts*"]
 exclude = ["p3.deepLoop*", "p3.psfao21*", "p3.testing*"]
 
 [tool.setuptools_scm]
