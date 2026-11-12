@@ -570,6 +570,15 @@ class psfR:
 
     def phase_structure_function(self, r0, x0_dphi, Cn2=None):
         """Compatibility adapter for the pure phase-SF assembly."""
+        # Validate gains before touching the AO object: legacy error contract.
+        if (x0_dphi is None or len(x0_dphi) != 2
+                or not np.all(np.isfinite(x0_dphi))):
+            raise ValueError(
+                "PSF-R requires two finite HO/TT gains [gho, gtt] after "
+                "the atmospheric parameters: use [r0, gho, gtt] for one "
+                "layer or [w_i*r0**(-5/3) for each layer, gho, gtt] "
+                "for multiple atmospheric/reconstructed layers."
+            )
         is_aniso = self.freq.isAniso
         result = assemble_phase_structure_function(
             r0_m=r0, gains=x0_dphi,
