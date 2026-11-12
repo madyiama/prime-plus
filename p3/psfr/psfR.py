@@ -17,6 +17,7 @@ from p3.aoSystem.aoSystem import aoSystem
 from p3.aoSystem.fourierModel import fourierModel
 import p3.aoSystem.FourierUtils as FourierUtils
 import p3.psfr.psfrUtils as psfrUtils
+from p3.psfr.ho import estimate_ho_statistics, reconstruct_ho_otf
 from p3.aoSystem.frequencyDomain import frequencyDomain as frequencyDomain
 from p3.aoSystem.ttFrame import sensor_frame_frequencies
 from p3.aoSystem.ttAngular import (
@@ -283,32 +284,32 @@ class psfR:
         return dphi_alias
 
     def residual_phase_structure_function(self, method='dm-based', basis='Vii'):
+        """HO SF via pure statistics plus the existing modal Fourier kernel.
+
+        self.Cao remains the uncorrected actuator covariance [m**2] for
+        the legacy error budget, and PSD diagnostics remain unchanged.
         """
-        Computes the phase structure function of the tip-tilt-excluded
-        residual phase.
-        """
-        # computing the empirical covariance matrix of the AO-residual OPD in the DM actuators domain
-        if method == 'slopes-based':
-            du = self.trs.rec.res
-        elif method == 'dm-based':
-            du = np.diff(self.trs.dm.com,axis=0)/self.ao.rtc.holoop['gain']
+        if method == 'dm-based':
+            measurements = self.trs.dm.com
+            gain = self.ao.rtc.holoop['gain']
+        elif method == 'slopes-based':
+            measurements = self.trs.rec.res
+            gain = None
+        else:
+            raise ValueError("Unknown HO residual method: " + str(method))
 
-        self.Cao = np.dot(du.T,du)/du.shape[0]
-
-        # Unbiasing noise and accounting for the wave number
-        Cao = (2*np.pi/self.freq.wvlRef)**2 * (self.Cao - self.trs.wfs.Cn_ao)
-
-        # Computing the phase structure function
-        _, dphi_ao = psfrUtils.modes2Otf(
-            Cao, self.trs.mat.dmIF,
-            self.ao.tel.pupil,
-            self.freq.nOtf,
-            basis=basis,
-            samp=self.freq.sampRef,
+        stats = estimate_ho_statistics(
+            measurements, self.trs.wfs.Cn_ao,
+            reference_wavelength_m=self.freq.wvlRef,
+            method=method, loop_gain=gain,
+        )
+        self.Cao = stats.empirical_covariance_m2
+        _, dphi_ao = reconstruct_ho_otf(
+            stats, self.trs.mat.dmIF, self.ao.tel.pupil, self.freq.nOtf,
+            sampling=self.freq.sampRef, basis=basis,
             covariance_psd_policy=getattr(self, 'ho_covariance_policy', 'strict'),
             covariance_diagnostics=getattr(self, 'ho_covariance_diagnostics', None),
         )
-
         return dphi_ao
 
     def jitter_phase_structure_function(self, Ctt=None):
