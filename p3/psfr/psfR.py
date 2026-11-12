@@ -18,6 +18,10 @@ from p3.aoSystem.fourierModel import fourierModel
 import p3.aoSystem.FourierUtils as FourierUtils
 import p3.psfr.psfrUtils as psfrUtils
 from p3.psfr.ho import estimate_ho_statistics, reconstruct_ho_otf
+from p3.psfr.structure import (
+    assemble_phase_structure_function,
+    normalize_anisoplanatism_zero_lag as _anisoplanatism_zero_lag,
+)
 from p3.aoSystem.frequencyDomain import frequencyDomain as frequencyDomain
 from p3.aoSystem.ttFrame import sensor_frame_frequencies
 from p3.aoSystem.ttAngular import (
@@ -59,29 +63,6 @@ def _integrate_spectral_psf(psf):
     if psf.ndim == 3:
         return np.sum(psf, axis=-1)
     raise ValueError("Expected a 2-D PSF or a 3-D wavelength cube")
-
-
-def _anisoplanatism_zero_lag(dphi):
-    """Enforce the OTF normalization Dphi(delta=0)=0, per source.
-
-    The interpolated Keck focal-angular anisoplanatism map may carry a
-    nonzero additive offset at the discrete zero-baseline OTF sample.
-    The constant scales the entire OTF but cancels when the PSF is
-    flux-normalized. It DOES bias the OTF-based Strehl and any WFE
-    converted from that Strehl. Subtracting the reference at the central
-    OTF sample changes neither the PSF shape nor the normalized energy.
-
-    Input is [y, x] or [y, x, source], phase rad^2 at science wavelength.
-    This removes only the DC offset; it does not change the spatially
-    varying anisoplanatism model or the Hardy analytical coefficients.
-    """
-    dphi = np.asarray(dphi, dtype=float)
-    if dphi.ndim not in (2, 3) or min(dphi.shape[:2]) < 2:
-        raise ValueError("Anisoplanatism dphi must be [y,x] or [y,x,source]")
-    if not np.all(np.isfinite(dphi)):
-        raise ValueError("Anisoplanatism dphi contains non-finite samples")
-    centre = (dphi.shape[0]//2, dphi.shape[1]//2)
-    return dphi - dphi[centre]
 
 
 class psfR:
@@ -588,56 +569,24 @@ class psfR:
         return otfPixel
 
     def phase_structure_function(self, r0, x0_dphi, Cn2=None):
-
-        # A multi-layer P3 forward vector starts with one turbulence
-        # strength per layer (w_l*r0**(-5/3)), followed by gho and gtt.
-        # Do not silently interpret missing gains as zero, nor fail with
-        # an opaque IndexError after an expensive multi-layer setup.
-        if (x0_dphi is None or len(x0_dphi) != 2
-                or not np.all(np.isfinite(x0_dphi))):
-            raise ValueError(
-                "PSF-R requires two finite HO/TT gains [gho, gtt] after "
-                "the atmospheric parameters: use [r0, gho, gtt] for one "
-                "layer or [w_i*r0**(-5/3) for each layer, gho, gtt] "
-                "for multiple atmospheric/reconstructed layers."
-            )
-
-        # On-axis phase structure function
-        SF = x0_dphi[0]*self.dphi_ao\
-           + x0_dphi[1]*self.dphi_tt \
-           + r0**(-5/3) * (self.dphi_fit + self.dphi_alias)
-
-        # Anisoplanatism is present for an LGS even with one equivalent
-        # atmospheric layer. In that case the fitted parameter is r0, not Cn2.
-        # P3's anisoplanatic kernels are normalized by r0^(-5/3) at atm.wvl,
-        # so convert their phase variance to the science reference wavelength.
-        if self.freq.isAniso:
-            if Cn2 is None:
-                Cn2 = np.asarray(self.ao.atm.weights) * r0**(-5/3)
-            Cn2 = np.asarray(Cn2, dtype=float).reshape(-1)
-            if Cn2.size != self.ao.atm.nL:
-                raise ValueError("Anisoplanatism: Cn2 must have one value per layer")
-            Cn2_at_science_wvl = Cn2 * (
-                self.ao.atm.wvl / self.freq.wvlRef
-            )**2
-            dani_raw = np.einsum(
-                'slxy,l->xys', self.dphi_ani, Cn2_at_science_wvl
-            )
-            # The interpolation of a baseline-averaged focal-anisoplanatic
-            # map can leave Dphi(0)>0 (0.304/0.176 rad^2 for n0120 at
-            # 1/7 layers). The PSF normalization removes this scale, but
-            # the unnormalized OTF Strehl is otherwise biased.
-            centre = (dani_raw.shape[0]//2, dani_raw.shape[1]//2)
-            self.dani_raw_zero_lag_rad2 = np.asarray(
-                dani_raw[centre], dtype=float
-            ).copy()
-            self.dani_zero_lag_reference = 'central_otf_sample'
-            self.dani = _anisoplanatism_zero_lag(dani_raw)
-            SF = SF[:,:,np.newaxis] + self.dani
-        else:
-            SF = np.repeat(SF[:,:,np.newaxis],self.ao.src.nSrc,axis=2)
-
-        return SF
+        """Compatibility adapter for the pure phase-SF assembly."""
+        is_aniso = self.freq.isAniso
+        result = assemble_phase_structure_function(
+            r0_m=r0, gains=x0_dphi,
+            dphi_ao=self.dphi_ao, dphi_tt=self.dphi_tt,
+            dphi_fit=self.dphi_fit, dphi_alias=self.dphi_alias,
+            n_sources=self.ao.src.nSrc,
+            anisoplanatism_kernel=self.dphi_ani if is_aniso else None,
+            layer_strengths=Cn2 if is_aniso else None,
+            layer_weights=self.ao.atm.weights if is_aniso else None,
+            atmosphere_wavelength_m=self.ao.atm.wvl if is_aniso else None,
+            science_wavelength_m=self.freq.wvlRef if is_aniso else None,
+        )
+        if is_aniso:
+            self.dani = result.anisoplanatism_rad2
+            self.dani_raw_zero_lag_rad2 = result.raw_zero_lag_rad2.copy()
+            self.dani_zero_lag_reference = result.zero_lag_reference
+        return result.dphi_rad2
 
     def __call__(self, x0, nPix=None):
 
