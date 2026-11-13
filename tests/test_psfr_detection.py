@@ -120,3 +120,53 @@ def test_validation_is_strict():
         mask=np.zeros((80,80),dtype=bool)
         mask[2,2]=True
         detect_stellar_sources(np.ones((80,80)),t,valid_mask=mask)
+
+
+
+def test_two_stars_not_eight_when_noisy_diffraction_speckles_are_present():
+    """Several compact pseudo-speckles should fail PSF core width/shape."""
+    t=template(n=96,width=2.8)
+    rng=np.random.default_rng(261)
+    yy,xx=np.indices((96,96))
+    stars=np.asarray([[19.2,24.5],[72.3,68.1]])
+    image=render_stellar_scene(
+        t,positions_xy_px=stars,fluxes=[7200,4200],background=18.
+    )
+    for x,y,peak,sigma in (
+        (39,22,50.,1.15),
+        (55,32,45.,1.3),
+        (35,55,38.,1.1),
+        (78,44,25.,1.25),
+        (24,41,42.,1.2),
+    ):
+        image+=peak*np.exp(-((xx-x)**2+(yy-y)**2)/(2*sigma**2))
+    image+=rng.normal(0,1,size=image.shape)
+    image[13,83]+=5000  # bright hot pixel
+    result=detect_stellar_sources(image,t,max_sources=8)
+    assert 5.0<result.psf_fwhm_px<8.0
+    assert result.exclusion_radius_px>=2*result.psf_fwhm_px
+    assert len(result.accepted)==2
+    np.testing.assert_allclose(result.positions_xy_px,stars,atol=.5)
+    assert len(result.rejected)>=1
+    assert any(c.classification in (
+        "hot_pixel_like","compact_spike_or_speckle",
+        "poor_psf_shape_or_speckle"
+    ) for c in result.rejected)
+    assert any(c.measured_fwhm_px is not None for c in result.rejected)
+    assert result.n_masked_hot_pixel_candidates>=1
+
+
+def test_measured_fwhm_has_same_half_max_area_convention_for_psf_prior():
+    from p3.psfr.detection import estimate_psf_fwhm_px
+    narrow=template(n=80,width=2.)
+    wide=template(n=80,width=4.)
+    fwhm_narrow=estimate_psf_fwhm_px(narrow)
+    fwhm_wide=estimate_psf_fwhm_px(wide)
+    assert fwhm_narrow>3.5
+    assert fwhm_wide>fwhm_narrow*1.6
+    assert fwhm_wide<12.
+    with pytest.raises(ValueError,match="FWHM/morphology"):
+        detect_stellar_sources(
+            np.ones((80,80)),wide,fwhm_min_ratio=1.7,
+            fwhm_max_ratio=1.2
+        )
