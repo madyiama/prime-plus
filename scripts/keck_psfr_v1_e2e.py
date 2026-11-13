@@ -163,6 +163,9 @@ def main():
     ap.add_argument("--config",type=Path,default=DEFAULT_CONFIG)
     ap.add_argument("--output",type=Path,
                     default=Path("results/psfr_v1_acceptance"))
+    ap.add_argument("--focal-algorithm",choices=("legacy", "symmetry"),
+                    default="legacy",
+                    help="Experimental focal covariance accelerator; default unchanged")
     ap.add_argument("--export-ao-basis",action="store_true",
                     help="Export frozen AO phase SF + optical kernels and validate nominal parity")
     ap.add_argument("--check-only",action="store_true",
@@ -182,6 +185,7 @@ def main():
         "source_branch_requirement":"merged_P4_A_P4_C_core",
         "science_validation":"not_a_calibrated_Keck_2020_model",
         "method":"van_dam+legacy_psfr+unity+noll_angular",
+        "focal_anisoplanatism_algorithm":args.focal_algorithm,
         "cases":[],
     }
     failures=0
@@ -208,6 +212,8 @@ def main():
             ]
             if args.export_ao_basis:
                 cmd.append("--export-ao-basis")
+            if args.focal_algorithm != "legacy":
+                cmd.extend(("--focal-algorithm",args.focal_algorithm))
             entry["command"]=cmd
             print("[PSFR V1] Reconstructing",fits.name,flush=True)
             with (destination/"psfr_v1_run.log").open("w",encoding="utf-8") as log:
