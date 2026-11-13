@@ -700,6 +700,12 @@ def main():
         help="SciPy FFT worker threads (default 1, batched mode only).",
     )
     parser.add_argument(
+        "--ho-fft-backend",choices=("scipy","numpy"),default="scipy",
+        help="Batched HO transform backend. NumPy may reproduce the "
+             "historical NumPy FFT rounding; SciPy was faster on n0120 "
+             "but narrowly missed strict HO SF pixel parity.",
+    )
+    parser.add_argument(
         "--profile-psfr",action="store_true",
         help="Opt-in cProfile of psfR initialization; saves .pstats and "
              "top cumulative functions (profiled wall time has overhead).",
@@ -708,7 +714,8 @@ def main():
     from p3.psfr.hoBatched import validate_fft_options
     try:
         validate_fft_options(
-            args.ho_fft_mode,args.ho_fft_batch_size,args.ho_fft_workers
+            args.ho_fft_mode,args.ho_fft_batch_size,args.ho_fft_workers,
+            args.ho_fft_backend,
         )
     except ValueError as exc:
         parser.error(str(exc))
@@ -1122,6 +1129,7 @@ def main():
             ho_fft_mode=args.ho_fft_mode,
             ho_fft_batch_size=args.ho_fft_batch_size,
             ho_fft_workers=args.ho_fft_workers,
+            ho_fft_backend=args.ho_fft_backend,
         )
 
     if args.profile_psfr:
@@ -1720,6 +1728,7 @@ def main():
         "ho_fft_mode": args.ho_fft_mode,
         "ho_fft_batch_size": int(args.ho_fft_batch_size),
         "ho_fft_workers": int(args.ho_fft_workers),
+        "ho_fft_backend": args.ho_fft_backend,
         "ho_fft_diagnostics": model.ho_fft_diagnostics,
         "ho_covariance_projection_applied": bool(
             getattr(model, "ho_covariance_diagnostics", {}).get(
