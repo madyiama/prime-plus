@@ -8,7 +8,30 @@ from p3.psfr.ao_basis import render_ao_psf,save_ao_basis
 from p3.psfr.stellar import render_stellar_scene
 from p3.psfr.template import save_psfr_template,template_from_psfr
 from scripts import fit_psfr_ao
-from tests.test_psfr_ao_fit import make_basis
+from p3.psfr.ao_basis import FrozenAOBasis,SCHEMA
+from dataclasses import replace
+
+
+def make_basis(n=64):
+    yy,xx=np.indices((n,n))
+    c=n//2
+    r2=(xx-c)**2+(yy-c)**2
+    psf=np.exp(-r2/(2*2.5**2))+1e-4
+    otf=np.fft.fftshift(np.fft.fft2(np.fft.ifftshift(psf)))
+    otf=otf/otf[c,c]
+    sf=1-np.exp(-r2/(2*9**2))
+    basis=FrozenAOBasis(
+        dphi_ao=.5*sf,dphi_tt=.22*sf,
+        dphi_fit=.055*sf,dphi_alias=.025*sf,
+        dphi_ani=np.empty((0,)),layer_weights=np.array([1.]),
+        static_pixel_otf=otf,diffraction_otf=np.ones((n,n)),
+        reference_psf=np.ones((n//2,n//2))/(n//2)**2,
+        r0_m=.3,atmosphere_wavelength_m=500e-9,
+        reference_wavelength_m=2.055e-6,k_ref=2,n_pixels=n//2,
+        camera_fov=n//2,is_anisoplanatic=False,
+        provenance={"schema":SCHEMA},
+    )
+    return replace(basis,reference_psf=render_ao_psf(basis))
 
 
 def test_hybrid_ao_cli_reuses_basis_without_telemetry_or_psfr_init(
