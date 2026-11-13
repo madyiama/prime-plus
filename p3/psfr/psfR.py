@@ -75,7 +75,7 @@ class psfR:
                  ho_covariance_policy='strict',
                  tt_kernel_convention='noll_angular',
                  tt_axis_angle_deg=None, tt_axis_parity='native',
-                 focal_algorithm='legacy'):
+                 focal_algorithm='legacy', focal_cache_dir=None):
         """
         Instantiating the psf-reconstruction model from a telemetry object
         """
@@ -150,6 +150,7 @@ class psfR:
         if focal_algorithm not in ("legacy", "symmetry"):
             raise ValueError("Unknown focal covariance algorithm")
         self.focal_algorithm = focal_algorithm
+        self.focal_cache_dir = focal_cache_dir
         self.Hfilter = 1
         if self.ao.aoMode=="SLAO":
             n_ph = 2*self.ao.dms.nActu1D[0] + 1
@@ -160,6 +161,7 @@ class psfR:
         self.freq = frequencyDomain(
             self.ao, Hfilter=self.Hfilter,
             focal_algorithm=self.focal_algorithm,
+            focal_cache_dir=self.focal_cache_dir,
         )
         self.fao = fourierModel(self.path_ini, calcPSF=False, display=False,
                                 freq=self.freq, ao=self.ao)
