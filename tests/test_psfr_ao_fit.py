@@ -139,3 +139,48 @@ def test_invalid_shape_fails_explicitly():
         render_ao_psf(broken)
     with pytest.raises(ValueError,match="nonnegative"):
         render_ao_psf(b,gho=-1.)
+
+
+
+def test_anisoplanatism_r0_reweighting_preserves_nominal_and_changes_psf():
+    b=make_basis()
+    n=b.dphi_ao.shape[0]
+    yy,xx=np.indices((n,n))
+    r2=(xx-n//2)**2+(yy-n//2)**2
+    # Keck-style [source, layer, y, x] SF geometry; nonzero raw
+    # centre is intentionally normalized by the same P3 convention.
+    kern=np.stack([
+        .15*(1-np.exp(-r2/(2*12**2)))+.02,
+        .09*(1-np.exp(-r2/(2*7**2)))+.01,
+    ],axis=0)[None,...]
+    provisional=replace(
+        b,dphi_ani=kern,layer_weights=np.array([.3,.7]),
+        is_anisoplanatic=True,
+    )
+    nominal=render_ao_psf(provisional)
+    physical=replace(provisional,reference_psf=nominal)
+    assert validate_ao_basis_parity(physical)["nominal_parity_passed"]
+    changed=render_ao_psf(physical,r0_m=.25)
+    assert np.linalg.norm(changed-nominal)>1e-6
+    assert changed.shape==nominal.shape
+
+
+def test_exploratory_gtt_sensitivity_is_explicit_and_reported():
+    b=make_basis()
+    t=template_from_psfr(b.reference_psf,pixel_scale_mas=9.942)
+    actual=template_from_psfr(
+        render_ao_psf(b,gtt=1.07),pixel_scale_mas=9.942,
+    )
+    data=render_stellar_scene(
+        actual,positions_xy_px=[[15.2,15.8]],
+        fluxes=[20000.],background=3.,
+    )
+    fitted=fit_hybrid_ao(
+        data,b,t,initial_positions_xy_px=[[15.2,15.8]],
+        active_parameters=("gtt",),allow_exploratory_gtt=True,
+        sigma=np.full(data.shape,.2),n_alternations=1,
+    )
+    assert fitted.ao_parameters["r0"]==b.r0_m
+    assert fitted.ao_parameters["gho"]==1.
+    assert .85<=fitted.ao_parameters["gtt"]<=1.15
+    assert any("NOT independent STRAP calibration" in x for x in fitted.warnings)
