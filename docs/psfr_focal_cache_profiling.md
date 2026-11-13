@@ -86,6 +86,16 @@ include an initial science PSF in the error-budget method.
       --focal-cache-dir results/keck_focal_geometry_cache \
       --output results/focal_cache_warm
 
+Verify cold/warm numerical equivalence automatically:
+
+    uv run python scripts/compare_keck_cache_runs.py \
+      --cold results/focal_cache_cold/n0120 \
+      --warm results/focal_cache_warm/n0120
+
+This produces results/compare_keck_focal_cache.json and rejects a
+different FITS/SAV, pupil rotation hypothesis, mismatched cache key,
+missing cache hit, or differing PSF (rtol=atol=1e-12).
+
 Expect cold cache_status=miss and warm=hit. The output
 PSF must remain identical to 1e-12. The geometric focal part
 should drop substantially on warm cache; full Keck run still
