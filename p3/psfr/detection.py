@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 import numpy as np
 from scipy.signal import fftconvolve
+from scipy.ndimage import label
 
 from .stellar import _FourierTemplateShift, fit_stellar_scene
 from .template import PSFTemplate
@@ -87,6 +88,91 @@ def _psf_core(template, radius):
             "PSF prior is unresolved: cannot distinguish stars from hot pixels"
         )
     return core
+
+
+def _halfmax_width(image, centre_xy, *, background=0., valid=None):
+    """Equivalent-area FWHM of the 8-connected >half-max core, in pixels.
+
+    Width = 2 sqrt(area / pi), where area is the contiguous set of
+    pixel centres above half the peak of the *background-subtracted*
+    image. The same estimator is used for PSF prior and observations.
+    It is not a Gaussian fit and must not be called an optical FWHM
+    measurement to subpixel accuracy.
+    """
+    a=np.asarray(image,dtype=float)-float(background)
+    if valid is None:
+        valid=np.isfinite(a)
+    if a.ndim!=2 or valid.shape!=a.shape:
+        raise ValueError("Invalid half-max image/mask")
+    cx,cy=map(int,centre_xy)
+    if not(0<=cx<a.shape[1] and 0<=cy<a.shape[0] and valid[cy,cx]):
+        return float("nan")
+    peak=float(a[cy,cx])
+    if not np.isfinite(peak) or peak<=0:
+        return float("nan")
+    above=(a >= .5*peak)&valid
+    labels,_=label(above,structure=np.ones((3,3),dtype=int))
+    connected=labels[cy,cx]
+    if connected==0:
+        return float("nan")
+    area=int(np.count_nonzero(labels==connected))
+    return float(2*np.sqrt(area/np.pi))
+
+
+def _candidate_shape_metrics(
+    residual, usable, x, y, kernel, *, expected_fwhm,
+):
+    """Width and PSF-shape cosine of a local source after halo removal.
+
+    The local sky level is the median of the surrounding annulus. This
+    is morphology only, not a detector-noise or phase-speckle model.
+    """
+    radius=kernel.shape[0]//2
+    ny,nx=residual.shape
+    low_y,max_y=max(0,y-radius),min(ny,y+radius+1)
+    low_x,max_x=max(0,x-radius),min(nx,x+radius+1)
+    y0,y1=low_y-y+radius,max_y-y+radius
+    x0,x1=low_x-x+radius,max_x-x+radius
+    patch=np.asarray(residual[low_y:max_y,low_x:max_x],dtype=float)
+    valid=usable[low_y:max_y,low_x:max_x]
+    psf=kernel[y0:y1,x0:x1]
+    cy,cx=y-low_y,x-low_x
+    gy,gx=np.indices(patch.shape)
+    radial=np.hypot(gx-cx,gy-cy)
+    outer=valid & (radial>=max(2.,expected_fwhm*1.15))
+    if np.count_nonzero(outer)<8:
+        return float("nan"), float("nan")
+    sky=float(np.median(patch[outer]))
+    # Subtract local halo baseline: unlike plain matched filtering, the
+    # candidate must have a 2-D core comparable with the PSF prior.
+    clean=patch-sky
+    # Account for the matched-filter position being at most ~1 pixel
+    # from a genuine source's brightest pixel.
+    search=(radial<=1.5)&valid
+    if not np.any(search):
+        return float("nan"), float("nan")
+    coords=np.where(search,clean,-np.inf)
+    brightest=np.unravel_index(np.argmax(coords),coords.shape)
+    width=_halfmax_width(clean,(brightest[1],brightest[0]),
+                         valid=valid)
+    central=valid & (radial<=max(2.5,expected_fwhm*1.1))
+    v=clean[central]
+    k=psf[central]
+    denominator=np.linalg.norm(v)*np.linalg.norm(k)
+    similarity=float(np.dot(v,k)/denominator) if denominator>0 else float("nan")
+    return width,similarity
+
+
+def estimate_psf_fwhm_px(template: PSFTemplate) -> float:
+    """Measured core FWHM using the exact same estimator as for candidates."""
+    if not isinstance(template,PSFTemplate):
+        raise TypeError("A validated PSFTemplate is required")
+    img=template.image
+    py,px=np.unravel_index(np.argmax(img),img.shape)
+    fwhm=_halfmax_width(img,(px,py))
+    if not np.isfinite(fwhm) or fwhm<1.6:
+        raise ValueError("PSF prior is undersampled: no reliable core FWHM")
+    return fwhm
 
 
 def detect_stellar_sources(
