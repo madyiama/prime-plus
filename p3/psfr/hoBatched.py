@@ -4,7 +4,8 @@ Exactly the original Gendron Vii per-mode expression:
 Vk = real(FFT2(Mk**2)*conj(FFT2(P))) - abs(FFT2(Mk))**2,
 buf += eigenvalue[k]*Vk.
 
-Only FFT evaluation is grouped (SciPy pocketfft with axes=(0,1));
+Only FFT evaluation is grouped (SciPy pocketfft with axes=(-2,-1)
+on contiguous [mode,y,x] batches);
 modal weighting and summation remain strictly in ascending mode order.
 No FFT, HO mode, or pupil result is cached across observations.
 """
@@ -72,14 +73,18 @@ def accumulate_vii_batched(
     n_batches=0
     for begin in range(0,modes.shape[2],int(batch_size)):
         end=min(modes.shape[2],begin+int(batch_size))
-        slab=modes[:,:,begin:end]
-        fft_modes=scipy_fft.fft2(slab,axes=(0,1),workers=int(workers))
-        fft_squares=scipy_fft.fft2(slab**2,axes=(0,1),workers=int(workers))
+        # Contiguous mode-first layout gives pocketfft a contiguous 2-D
+        # transform plane per mode. Merely passing [y,x,mode] with axes
+        # (0,1) is strided and can be SLOWER than the original loop.
+        # This is a temporary local copy of the CURRENT pupil modes.
+        slab=np.moveaxis(modes[:,:,begin:end],-1,0).copy(order="C")
+        fft_modes=scipy_fft.fft2(slab,axes=(-2,-1),workers=int(workers))
+        fft_squares=scipy_fft.fft2(slab**2,axes=(-2,-1),workers=int(workers))
         for i,k in enumerate(range(begin,end)):
             # Preserve original per-mode expression and accumulation ORDER:
             # no einsum, BLAS sum reduction or double counting.
-            vk=(np.real(fft_squares[:,:,i]*conj)
-                - np.abs(fft_modes[:,:,i])**2)
+            vk=(np.real(fft_squares[i]*conj)
+                - np.abs(fft_modes[i])**2)
             buf=buf+weights[k]*vk
         n_batches+=1
     if diagnostics is not None:
@@ -89,6 +94,7 @@ def accumulate_vii_batched(
             "workers":int(workers),
             "mode_count":int(weights.size),
             "batch_count":int(n_batches),
+            "fft_storage_layout":"contiguous_mode_first_y_x",
             "vii_fft_and_accumulation_ms":1000*(perf_counter()-t0),
             "batch_scratch_budget_bytes":MAX_BATCH_WORK_BYTES,
             "pupil_modes_or_ffts_cached":False,
