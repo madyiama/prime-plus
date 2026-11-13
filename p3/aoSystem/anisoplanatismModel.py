@@ -233,8 +233,7 @@ def angular_function(tel, atm, src, gs, nOtf, samp, method="Fourier", msk_in=1, 
 
         # Instantiation
         I0 = 3.0/5.0
-        I1 = (FourierUtils.Ialpha(f0*rhoX, f0*rhoY)
-              if covariance_algorithm == 'legacy' else None)
+        I1 = FourierUtils.Ialpha(f0*rhoX, f0*rhoY)
         cte = 0.12184*0.06*(2*np.pi)**2*atm.L0**(5/3)
 
         # Anisoplanatism Structure Function
