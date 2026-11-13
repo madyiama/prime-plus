@@ -18,6 +18,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+from zipfile import BadZipFile
 from time import perf_counter
 
 import numpy as np
@@ -118,7 +119,7 @@ def read_focal_cache(folder, key, shape, *, diagnostics=None):
                     raise ValueError("invalid cached SF")
                 result=np.array(a,dtype=np.float64,copy=True)
                 status="hit"
-        except (OSError,ValueError,KeyError,TypeError):
+        except (OSError,ValueError,KeyError,TypeError,EOFError,BadZipFile):
             status="invalidated"
     if diagnostics is not None:
         diagnostics["cache_status"]=status
