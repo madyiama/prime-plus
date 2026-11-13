@@ -97,3 +97,65 @@ def test_invalid_algorithm_and_bad_baseline_rejected():
     sx,sy=_separations(5)
     with pytest.raises(ValueError,match="integer-coordinate"):
         grouped_matrix_to_map(np.ones((25,25)),sx+0.25,sy)
+
+
+
+def test_angular_flicker_mode_is_independent_of_focal_acceleration():
+    """Regression for an unintended reference to focal-only algorithm state."""
+    from p3.aoSystem.anisoplanatismModel import angular_function
+    tel,atm,src,gs=_fake_system(n_layers=3,l0=25.)
+    tel.airmass=1.
+    # Unlike the Fourier default, this tests the angular Flicker
+    # alternative, which must never read the focal covariance switch.
+    result=angular_function(
+        tel,atm,src,gs,nOtf=16,samp=2.,method="Flicker",
+    )
+    assert result.shape==(src.nSrc,atm.nL,16,16)
+    assert np.isfinite(result).all()
+
+
+def test_keck_like_actuator_array_on_fast_path_is_finite():
+    """20+1 actuators maps to n_ph=43, beyond previous small-matrix cases.
+
+    Do not run legacy matrix-to-map here: its n_ph**6 masks consume
+    substantial memory. Focus on the new branch's geometry and shapes.
+    """
+    tel,atm,src,gs=_fake_system(n_layers=2,l0=25.)
+    # Only one science direction and one nonzero layer for runtime.
+    src.nSrc=1
+    src.direction=np.array([[0.], [0.]])
+    result=focal_angular_function(
+        tel,atm,src,gs,
+        nActu=np.array([21]),nOtf=64,samp=2.,
+        covariance_algorithm="symmetry",
+    )
+    assert result.shape==(1,2,64,64)
+    np.testing.assert_array_equal(result[:,0],0.)
+    assert np.isfinite(result).all()
+
+
+def test_lgs_dispatch_passes_algorithm_without_affecting_angular_terms(
+    monkeypatch,
+):
+    from p3.aoSystem import anisoplanatismModel as aniso
+    tel,atm,src,gs=_fake_system(n_layers=3,l0=25.)
+    tel.airmass=1.
+    gs.zenith=np.array([0.])
+    gs.azimuth=np.array([0.])
+    ngs=NS(height=0.,direction=np.array([[0.],[0.]]))
+    zeros=np.zeros((src.nSrc,atm.nL,20,20))
+    monkeypatch.setattr(aniso,"angular_function",lambda *a,**kw: zeros.copy())
+    monkeypatch.setattr(
+        aniso,"anisokinetism_function",lambda *a,**kw: zeros.copy()
+    )
+    legacy=aniso.anisoplanatism_structure_function(
+        tel,atm,src,gs,ngs,nOtf=20,samp=2.,nActu=np.array([3]),
+        focal_algorithm="legacy",
+    )
+    symmetry=aniso.anisoplanatism_structure_function(
+        tel,atm,src,gs,ngs,nOtf=20,samp=2.,nActu=np.array([3]),
+        focal_algorithm="symmetry",
+    )
+    np.testing.assert_allclose(
+        symmetry[0],legacy[0],rtol=1e-12,atol=2e-11
+    )
