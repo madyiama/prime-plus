@@ -183,7 +183,7 @@ def estimate_psf_fwhm_px(template: PSFTemplate) -> float:
     py,px=np.unravel_index(np.argmax(img),img.shape)
     fwhm=_halfmax_width(img,(px,py))
     if not np.isfinite(fwhm) or fwhm<1.6:
-        raise ValueError("PSF prior is undersampled: no reliable core FWHM")
+        raise ValueError("PSF prior is unresolved or undersampled: no reliable core FWHM")
     return fwhm
 
 
