@@ -14,6 +14,10 @@ from .template import (PSFTemplate, template_from_psfr,
                        save_psfr_template, load_psfr_template)
 from .stellar import (StellarFitResult, render_stellar_scene, fit_stellar_scene)
 from .detection import (SourceCandidate, SourceDetection, detect_stellar_sources)
+from .ao_basis import (FrozenAOBasis, frozen_basis_from_model,
+                       render_ao_psf, validate_ao_basis_parity,
+                       save_ao_basis, load_ao_basis)
+from .ao_fit import HybridAOFit, fit_hybrid_ao
 
 __all__ = [
     "PSFProduct", "normalize_psf",
@@ -27,4 +31,7 @@ __all__ = [
     "save_psfr_template", "load_psfr_template",
     "StellarFitResult", "render_stellar_scene", "fit_stellar_scene",
     "SourceCandidate", "SourceDetection", "detect_stellar_sources",
+    "FrozenAOBasis", "frozen_basis_from_model", "render_ao_psf",
+    "validate_ao_basis_parity", "save_ao_basis", "load_ao_basis",
+    "HybridAOFit", "fit_hybrid_ao",
 ]
