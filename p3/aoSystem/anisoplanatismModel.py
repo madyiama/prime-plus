@@ -9,6 +9,7 @@ import numpy as np
 import scipy.special as spc
 import p3.aoSystem.FourierUtils as FourierUtils
 from p3.aoSystem.zernike import zernike
+from p3.aoSystem.focalFast import symmetric_focal_layer, grouped_matrix_to_map
 
 #%% VARIANCE
 def anisoplanatism_wfe(tel, atm, src, ngs, dtype=np.float64):
@@ -164,7 +165,7 @@ def focal_anisoplanatism_variance(tel, atm, lgs):
 
 #%% PHASE STRUCTURE FUNCTION
 def anisoplanatism_structure_function(tel, atm, src, lgs, ngs,
-                                      nOtf, samp, nActu, msk_in=1, Hfilter=1):
+                                      nOtf, samp, nActu, msk_in=1, Hfilter=1, focal_algorithm='legacy'):
     """
     Computes the anisoplanatic phase structure functions
     INPUTS:
@@ -196,7 +197,8 @@ def anisoplanatism_structure_function(tel, atm, src, lgs, ngs,
         lgs.zenith = 0
         dani_foc = focal_angular_function(tel, atm, src, lgs,
                                           nActu, nOtf, samp,
-                                          h_filt=Hfilter)
+                                          h_filt=Hfilter,
+                                          covariance_algorithm=focal_algorithm)
         # angular anisoplanatism only
         lgs.zenith = lgs_dir[0]
         lgs.azimuth = lgs_dir[1]
@@ -231,7 +233,8 @@ def angular_function(tel, atm, src, gs, nOtf, samp, method="Fourier", msk_in=1, 
 
         # Instantiation
         I0 = 3.0/5.0
-        I1 = FourierUtils.Ialpha(f0*rhoX, f0*rhoY)
+        I1 = (FourierUtils.Ialpha(f0*rhoX, f0*rhoY)
+              if covariance_algorithm == 'legacy' else None)
         cte = 0.12184*0.06*(2*np.pi)**2*atm.L0**(5/3)
 
         # Anisoplanatism Structure Function
@@ -279,6 +282,7 @@ def angular_function(tel, atm, src, gs, nOtf, samp, method="Fourier", msk_in=1, 
 def focal_angular_function(
     tel, atm, src, gs, nActu, nOtf, samp, h_filt=1,
     *, pupil_grid_mode='legacy', output_grid='otf',
+    covariance_algorithm='legacy',
 ):
     """
     Returns the nActu**2 x nActu**2 point wise phase structure function
@@ -299,6 +303,8 @@ def focal_angular_function(
         raise ValueError("Unknown focal pupil_grid_mode: " + str(pupil_grid_mode))
     if output_grid not in ('otf', 'native'):
         raise ValueError("Unknown focal output_grid: " + str(output_grid))
+    if covariance_algorithm not in ("legacy", "symmetry"):
+        raise ValueError("Unknown focal covariance algorithm: " + str(covariance_algorithm))
     umax = tel.D/2 * max([1,samp])/2
     # The exact Kolmogorov limit must be evaluated analytically, NOT by
     # setting L0 to an enormous finite value: the McDonald covariance
@@ -364,6 +370,31 @@ def focal_angular_function(
         I0 = 3.0/5.0
         I1 = FourierUtils.Ialpha(f0*rhoX, f0*rhoY)
         cte = 0.12184*0.06*(2*np.pi)**2 * outer_scale**(5.0/3.0)
+
+    # Opt-in algebraic acceleration. The existing six Flicker terms and
+    # matrix_to_map remain the default; direct full Keck image parity is
+    # required before enabling this for production telemetry.
+    if covariance_algorithm == 'symmetry':
+        for iSrc in range(src.nSrc):
+            thx = dist[0][iSrc]
+            thy = dist[1][iSrc]
+            for l, zl in enumerate(atm.heights):
+                if zl:
+                    tmp = symmetric_focal_layer(
+                        u, X1, Y1, rhoX, rhoY, sep_x, sep_y,
+                        cone_fraction=zl/gs.height,
+                        theta_shift_x_m=zl*thx,
+                        theta_shift_y_m=zl*thy,
+                        finite_outer_scale_m=outer_scale,
+                    )
+                    if not np.isscalar(h_filt):
+                        tmp = np.dot(h_filt, np.dot(tmp, h_filt_t))
+                    cmap = grouped_matrix_to_map(tmp, sep_x, sep_y)
+                    Dani_l[iSrc, l] = (
+                        cmap if output_grid == 'native'
+                        else FourierUtils.interpolateSupport(cmap, nOtf)
+                    )
+        return cte*Dani_l
 
     # Anisoplanatism Structure Function
     for iSrc in range(src.nSrc):
