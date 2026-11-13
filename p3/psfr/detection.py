@@ -393,7 +393,7 @@ def detect_stellar_sources(
                     initial_positions_xy_px=np.asarray(fitted_positions),
                     initial_fluxes=np.asarray(fitted_fluxes),
                     initial_background=background,
-                    valid_mask=detection_mask,sigma=noise,
+                    valid_mask=fit_mask,sigma=noise,
                     max_position_offset_px=min(1.5,min_separation_px/2),
                     robust_loss="soft_l1",f_scale=1.,max_nfev=100,
                 )
