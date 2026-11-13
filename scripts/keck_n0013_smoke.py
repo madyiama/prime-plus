@@ -1260,6 +1260,12 @@ def main():
     psf = np.asarray(stage("psfR forward",
                            lambda: model(forward_parameters))).squeeze()
     np.save(args.output / "telemetry_only_psf.npy", psf)
+    # Science cutout is exactly the one parsed/cropped by telemetryKeck.
+    # Save it alongside the PSF to avoid incorrect external FITS recropping.
+    np.save(
+        args.output / "observed_nirc2_cutout.npy",
+        np.asarray(trs.cam.image, dtype=np.float64),
+    )
     # P4 compares the same model-only outputs for all TT ablations. A
     # three-bin spectral cube is collapsed by sum, as for the smoke figure.
     from p3.aoSystem.ttFrame import (
@@ -1539,6 +1545,9 @@ def main():
     (args.output / "metadata.json").write_text(json.dumps({
         "input_fits": str(args.fits.resolve()),
         "input_sav": str(args.sav.resolve()),
+        "camera_pixel_scale_mas": float(model.ao.cam.psInMas),
+        "observed_cutout_file": "observed_nirc2_cutout.npy",
+        "observed_cutout_origin": "telemetryKeck.trs.cam.image",
         "code_revision": _git_code_revision(),
         "filter_profile_diagnostics": filter_profile_diagnostics,
         "addNCPA": False,
