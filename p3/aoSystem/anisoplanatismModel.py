@@ -10,6 +10,10 @@ import scipy.special as spc
 import p3.aoSystem.FourierUtils as FourierUtils
 from p3.aoSystem.zernike import zernike
 from p3.aoSystem.focalFast import symmetric_focal_layer, grouped_matrix_to_map
+from p3.aoSystem.focalCache import (
+    key_for_focal, read_focal_cache, write_focal_cache,
+)
+from time import perf_counter
 
 #%% VARIANCE
 def anisoplanatism_wfe(tel, atm, src, ngs, dtype=np.float64):
@@ -165,7 +169,8 @@ def focal_anisoplanatism_variance(tel, atm, lgs):
 
 #%% PHASE STRUCTURE FUNCTION
 def anisoplanatism_structure_function(tel, atm, src, lgs, ngs,
-                                      nOtf, samp, nActu, msk_in=1, Hfilter=1, focal_algorithm='legacy'):
+                                      nOtf, samp, nActu, msk_in=1, Hfilter=1, focal_algorithm='legacy',
+                                       focal_cache_dir=None, focal_diagnostics=None):
     """
     Computes the anisoplanatic phase structure functions
     INPUTS:
@@ -198,7 +203,9 @@ def anisoplanatism_structure_function(tel, atm, src, lgs, ngs,
         dani_foc = focal_angular_function(tel, atm, src, lgs,
                                           nActu, nOtf, samp,
                                           h_filt=Hfilter,
-                                          covariance_algorithm=focal_algorithm)
+                                          covariance_algorithm=focal_algorithm,
+                                          focal_cache_dir=focal_cache_dir,
+                                          focal_diagnostics=focal_diagnostics)
         # angular anisoplanatism only
         lgs.zenith = lgs_dir[0]
         lgs.azimuth = lgs_dir[1]
@@ -281,7 +288,8 @@ def angular_function(tel, atm, src, gs, nOtf, samp, method="Fourier", msk_in=1, 
 def focal_angular_function(
     tel, atm, src, gs, nActu, nOtf, samp, h_filt=1,
     *, pupil_grid_mode='legacy', output_grid='otf',
-    covariance_algorithm='legacy',
+    covariance_algorithm='legacy', focal_cache_dir=None,
+    focal_diagnostics=None,
 ):
     """
     Returns the nActu**2 x nActu**2 point wise phase structure function
@@ -343,6 +351,40 @@ def focal_angular_function(
         raise ValueError("DM actuator count must be a positive integer")
     n_ph = 2 * int(n_actu) + 1
 
+    # The focal SF is unweighted and does NOT read a pupil mask, pupil
+    # angle, NCPA or OTF. Cache ONLY this geometric path with a scalar
+    # (identity) filter, never a pupil-dependent matrix Hfilter.
+    _start_focal = perf_counter()
+    _cache_key = None
+    _cache_allowed = (covariance_algorithm == "symmetry"
+                      and focal_cache_dir is not None
+                      and np.isscalar(h_filt))
+    if focal_diagnostics is not None:
+        focal_diagnostics.update({
+            "algorithm": covariance_algorithm,
+            "cache_status": ("disabled" if focal_cache_dir is None
+                             else ("bypass_filtered" if not np.isscalar(h_filt)
+                                   else "not_applicable")),
+            "pupil_rotation_or_optical_otf_cached": False,
+            "covariance_ms": 0., "grouping_ms": 0.,
+            "interpolation_ms": 0., "n_computed_layers": 0,
+        })
+    if _cache_allowed:
+        _cache_key = key_for_focal(
+            tel, atm, src, gs, nActu, nOtf, samp,
+            pupil_grid_mode=pupil_grid_mode, output_grid=output_grid,
+        )
+        _n_grid = (2*n_ph-1 if output_grid == "native" else nOtf)
+        _cache_shape = (int(src.nSrc),int(atm.nL),_n_grid,_n_grid)
+        _cached_sf = read_focal_cache(
+            focal_cache_dir,_cache_key,_cache_shape,
+            diagnostics=focal_diagnostics,
+        )
+        if _cached_sf is not None:
+            if focal_diagnostics is not None:
+                focal_diagnostics["total_ms"] = 1000*(perf_counter()-_start_focal)
+            return _cached_sf
+
     # All coordinates below are physical metres in the telescope pupil.
     # Legacy grid is preserved bit-for-bit for default reconstructions.
     # The physical alternative spans [-D/2, D/2] on each pupil axis.
@@ -379,6 +421,7 @@ def focal_angular_function(
             thy = dist[1][iSrc]
             for l, zl in enumerate(atm.heights):
                 if zl:
+                    _t_cov = perf_counter()
                     tmp = symmetric_focal_layer(
                         u, X1, Y1, rhoX, rhoY, sep_x, sep_y,
                         cone_fraction=zl/gs.height,
@@ -386,14 +429,31 @@ def focal_angular_function(
                         theta_shift_y_m=zl*thy,
                         finite_outer_scale_m=outer_scale,
                     )
+                    if focal_diagnostics is not None:
+                        focal_diagnostics["covariance_ms"] += 1000*(perf_counter()-_t_cov)
+                        focal_diagnostics["n_computed_layers"] += 1
+                    _t_group = perf_counter()
                     if not np.isscalar(h_filt):
                         tmp = np.dot(h_filt, np.dot(tmp, h_filt_t))
                     cmap = grouped_matrix_to_map(tmp, sep_x, sep_y)
+                    if focal_diagnostics is not None:
+                        focal_diagnostics["grouping_ms"] += 1000*(perf_counter()-_t_group)
+                    _t_interp = perf_counter()
                     Dani_l[iSrc, l] = (
                         cmap if output_grid == 'native'
                         else FourierUtils.interpolateSupport(cmap, nOtf)
                     )
-        return cte*Dani_l
+                    if focal_diagnostics is not None:
+                        focal_diagnostics["interpolation_ms"] += 1000*(perf_counter()-_t_interp)
+        _focal_output = cte*Dani_l
+        if _cache_allowed:
+            write_focal_cache(
+                focal_cache_dir, _cache_key, _focal_output,
+                diagnostics=focal_diagnostics,
+            )
+        if focal_diagnostics is not None:
+            focal_diagnostics["total_ms"] = 1000*(perf_counter()-_start_focal)
+        return _focal_output
 
     # Anisoplanatism Structure Function
     for iSrc in range(src.nSrc):
