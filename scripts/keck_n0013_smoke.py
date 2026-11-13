@@ -671,6 +671,16 @@ def main():
             "261 corresponds to 13 samples per actuator pitch."
         ),
     )
+    parser.add_argument(
+        "--export-ao-basis",action="store_true",
+        help="Save frozen AO SF/OTF kernels for independent constrained AO "
+             "fitting; require strict nominal Keck PSF parity.",
+    )
+    parser.add_argument(
+        "--focal-algorithm",choices=("legacy", "symmetry"),default="legacy",
+        help="Focal anisoplanatism covariance evaluation: historical (default) "
+             "or opt-in six-term algebraic symmetry (requires Keck parity check)",
+    )
     args = parser.parse_args()
     if args.p3_pupil_parity != "native" and args.p3_pupil_resampling != "physical_binary":
         parser.error("--p3-pupil-parity flip_x/flip_y requires physical_binary")
@@ -1074,6 +1084,7 @@ def main():
         tt_kernel_convention=args.tt_kernel_convention,
         tt_axis_angle_deg=args.tt_axis_angle_deg,
         tt_axis_parity=args.tt_axis_parity,
+        focal_algorithm=args.focal_algorithm,
     ))
 
     # Telescope applies PupilResampling to the archived pupil at OTF build
@@ -1260,6 +1271,30 @@ def main():
     psf = np.asarray(stage("psfR forward",
                            lambda: model(forward_parameters))).squeeze()
     np.save(args.output / "telemetry_only_psf.npy", psf)
+    if args.export_ao_basis:
+        from p3.psfr.ao_basis import (
+            frozen_basis_from_model,validate_ao_basis_parity,save_ao_basis,
+        )
+        basis=frozen_basis_from_model(
+            model,psf,provenance={
+                "input_fits":str(args.fits.resolve()),
+                "input_sav":str(args.sav.resolve()),
+                "ao_baseline":"Keck LGS STRAP V1",
+                "ho_covariance_policy":args.ho_covariance_policy,
+                "tt_kernel_convention":model.tt_kernel_convention,
+                "tt_covariance_mode":model.tt_covariance_mode,
+                "tt_mirror_model":model.tt_mirror_model,
+                "optical_pupil_resampling":args.p3_pupil_resampling,
+                "optical_pupil_rotation":args.p3_pupil_rotation,
+            },
+        )
+        parity=validate_ao_basis_parity(basis)
+        path=save_ao_basis(basis,args.output/"ao_fit_basis.npz")
+        (args.output/"ao_fit_basis_parity.json").write_text(
+            json.dumps(parity,indent=2,allow_nan=False),encoding="utf-8"
+        )
+        print("[AO basis] Keck V1 parity VERIFIED",parity,
+              "saved",path,flush=True)
     # Science cutout is exactly the one parsed/cropped by telemetryKeck.
     # Save it alongside the PSF to avoid incorrect external FITS recropping.
     np.save(
@@ -1548,6 +1583,14 @@ def main():
         "camera_pixel_scale_mas": float(model.ao.cam.psInMas),
         "observed_cutout_file": "observed_nirc2_cutout.npy",
         "observed_cutout_origin": "telemetryKeck.trs.cam.image",
+        "focal_anisoplanatism_algorithm": args.focal_algorithm,
+        "frequency_anisoplanatism_elapsed_s": float(model.freq.tani)/1000.0,
+        "psfr_total_init_elapsed_s": float(model.t_init)/1000.0,
+        "ao_fit_basis_exported": bool(args.export_ao_basis),
+        "ao_fit_basis_file": ("ao_fit_basis.npz" if args.export_ao_basis else None),
+        "ao_fit_basis_parity": (
+            "ao_fit_basis_parity.json" if args.export_ao_basis else None
+        ),
         "code_revision": _git_code_revision(),
         "filter_profile_diagnostics": filter_profile_diagnostics,
         "addNCPA": False,
