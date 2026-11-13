@@ -158,3 +158,26 @@ def test_disabled_cache_has_no_disk_side_effect(tmp_path):
     assert report["n_computed_layers"]==2
     assert np.isfinite(output).all()
     assert not list(tmp_path.iterdir())
+
+
+
+def test_bounded_geometry_cache_evicts_only_its_old_entries(tmp_path,monkeypatch):
+    from p3.aoSystem import focalCache
+    monkeypatch.setattr(focalCache,"MAX_CACHE_ENTRIES",2)
+    monkeypatch.setattr(focalCache,"MAX_CACHE_BYTES",256*1024*1024)
+    tel,atm,src,gs=make_case()
+    unrelated=tmp_path/"user_nirc2_pupil_otf.npy"
+    unrelated.write_bytes(b"must-not-delete")
+    keys=[]
+    for angle in (1e-5,1.1e-5,1.2e-5):
+        src.direction[0,0]=angle
+        _,d=calculate(tel,atm,src,gs,tmp_path)
+        assert d["cache_status"]=="miss"
+        keys.append(d["cache_key"])
+    cached=list(tmp_path.glob("focal_symmetric_*.npz"))
+    assert len(cached)==2
+    assert not (tmp_path/("focal_symmetric_"+keys[0]+".npz")).exists()
+    assert (tmp_path/("focal_symmetric_"+keys[-1]+".npz")).exists()
+    assert unrelated.read_bytes()==b"must-not-delete"
+    _,retry=calculate(tel,atm,src,gs,tmp_path)
+    assert retry["cache_status"]=="hit"
