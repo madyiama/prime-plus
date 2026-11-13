@@ -124,6 +124,9 @@ def test_keck_like_actuator_array_on_fast_path_is_finite():
     # Only one science direction and one nonzero layer for runtime.
     src.nSrc=1
     src.direction=np.array([[0.], [0.]])
+    # Match the real Keck telemetry convention: a one-element array
+    # stores the LGS height rather than a Python scalar.
+    gs.height=np.array([90000.],dtype=np.float64)
     result=focal_angular_function(
         tel,atm,src,gs,
         nActu=np.array([21]),nOtf=64,samp=2.,
