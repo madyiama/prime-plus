@@ -8,6 +8,8 @@ from .ho import HOStatistics, estimate_ho_statistics, reconstruct_ho_otf
 from .structure import PhaseStructureResult, assemble_phase_structure_function
 from .spectral import (FilterProfile, PhotonQuadrature, read_kai_filter,
                        photon_quadrature, integrate_monochromatic_psfs)
+from .chromatic import (PupilLagGrid, MonochromaticResult,
+                        prepare_pupil_lag_grid, detector_monochromatic_psf)
 
 __all__ = [
     "PSFProduct", "normalize_psf",
@@ -15,4 +17,6 @@ __all__ = [
     "PhaseStructureResult", "assemble_phase_structure_function",
     "FilterProfile", "PhotonQuadrature", "read_kai_filter",
     "photon_quadrature", "integrate_monochromatic_psfs",
+    "PupilLagGrid", "MonochromaticResult",
+    "prepare_pupil_lag_grid", "detector_monochromatic_psf",
 ]
