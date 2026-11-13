@@ -82,6 +82,7 @@ class psfR:
 
         # INSTANTIATING THE MODEL OF THE AOSYSTEM
         tstart = time.time()
+        _start_ao_perf = time.perf_counter()
 
         if not hasattr(trs,'path_ini'):
             raise ValueError("no .ini file attached with the telemetry object")
@@ -144,7 +145,9 @@ class psfR:
         if self.ao.tel.path_static_on and hasattr(trs.tel,'map_ncpa')and np.any(trs.tel.map_ncpa):
             self.ao.tel.opdMap_on = trs.tel.map_ncpa
         self.t_initAO = 1000*(time.time() - tstart)
-        self.timing_breakdown_ms = {"ao_system": float(self.t_initAO)}
+        self.timing_breakdown_ms = {
+            "ao_system": 1000*(time.perf_counter()-_start_ao_perf)
+        }
 
 
         # INSTANTIATING THE SPATIAL FREQUENCY AND THE FOURIER MODEL
@@ -152,12 +155,16 @@ class psfR:
             raise ValueError("Unknown focal covariance algorithm")
         self.focal_algorithm = focal_algorithm
         self.focal_cache_dir = focal_cache_dir
+        _start_dm_filter = time.perf_counter()
         self.Hfilter = 1
         if self.ao.aoMode=="SLAO":
             n_ph = 2*self.ao.dms.nActu1D[0] + 1
             modes = self.ao.dms.setInfluenceFunction(n_ph)
             #val_act = np.argwhere(modes.max(axis=0)==0)
             self.Hfilter = np.dot(modes, modes.T)
+        self.timing_breakdown_ms["dm_influence_filter"] = 1000*(
+            time.perf_counter()-_start_dm_filter
+        )
 
         _start_frequency = time.perf_counter()
         self.freq = frequencyDomain(
@@ -201,6 +208,7 @@ class psfR:
         self.t_dao = 1000*(time.time() - tstart) - self.t_dtt
 
         # INSTANTIATING THE ANISOPLANATISM PHASE STRUCTURE FUNCTION IF ANY
+        _start_aniso_transfer = time.perf_counter()
         if self.ao.lgs is None or self.ao.lgs.height==0:
             if self.freq.isAniso:
                 self.dphi_ani = self.freq.dani_ang
@@ -210,12 +218,19 @@ class psfR:
             self.dani_tt = self.freq.dani_tt
             self.dphi_ani = self.dani_focang + self.dani_tt
 
+        self.timing_breakdown_ms["anisoplanatism_transfer"] = 1000*(
+            time.perf_counter()-_start_aniso_transfer
+        )
         # COMPUTING THE DETECTOR PIXEL TRANSFER FUNCTION
+        _start_detector_otf = time.perf_counter()
         if self.trs.tel.name!='OOMAO':
             self.otfPixel = self.pixel_optical_transfer_function()
         else:
             self.otfPixel = 1.0
 
+        self.timing_breakdown_ms["detector_pixel_otf"] = 1000*(
+            time.perf_counter()-_start_detector_otf
+        )
         # COMPUTING THE ERROR BREAKDOWN:
         _start_budget = time.perf_counter()
         self.get_error_breakdown()
