@@ -131,7 +131,7 @@ def modes2Otf(Cmm, modes, pupil, n_otf, samp=2, basis='Vii',
             "mode":fft_mode,
             "batch_size":int(fft_batch_size),
             "workers":int(fft_workers),
-            "fft_backend":fft_backend,
+            "fft_backend":("numpy_legacy" if fft_mode=="legacy" else fft_backend),
             "pupil_modes_or_ffts_cached":False,
         })
     #Autocorrelation of the pupil expressed in pupil
