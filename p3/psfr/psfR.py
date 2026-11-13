@@ -77,7 +77,7 @@ class psfR:
                  tt_axis_angle_deg=None, tt_axis_parity='native',
                  focal_algorithm='legacy', focal_cache_dir=None,
                  ho_fft_mode='legacy', ho_fft_batch_size=16,
-                 ho_fft_workers=1):
+                 ho_fft_workers=1, ho_fft_backend='scipy'):
         """
         Instantiating the psf-reconstruction model from a telemetry object
         """
@@ -131,10 +131,13 @@ class psfR:
         self.ho_covariance_policy = ho_covariance_policy
         self.ho_covariance_diagnostics = {}
         from p3.psfr.hoBatched import validate_fft_options
-        validate_fft_options(ho_fft_mode,ho_fft_batch_size,ho_fft_workers)
+        validate_fft_options(
+            ho_fft_mode,ho_fft_batch_size,ho_fft_workers,ho_fft_backend
+        )
         self.ho_fft_mode = ho_fft_mode
         self.ho_fft_batch_size = int(ho_fft_batch_size)
         self.ho_fft_workers = int(ho_fft_workers)
+        self.ho_fft_backend = ho_fft_backend
         self.ho_fft_diagnostics = {}
         self.ao = aoSystem(self.path_ini, path_root=path_root)
 
@@ -341,6 +344,7 @@ class psfR:
             fft_mode=getattr(self,'ho_fft_mode','legacy'),
             fft_batch_size=getattr(self,'ho_fft_batch_size',16),
             fft_workers=getattr(self,'ho_fft_workers',1),
+            fft_backend=getattr(self,'ho_fft_backend','scipy'),
             fft_diagnostics=getattr(self,'ho_fft_diagnostics',None),
         )
         return dphi_ao
