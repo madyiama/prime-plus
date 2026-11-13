@@ -40,7 +40,7 @@ def _prune_cache(folder, *, protected):
             st=path.stat()
         except OSError:
             continue
-        files.append((st.st_mtime,st.st_size,path))
+        files.append((st.st_mtime_ns,st.st_size,path))
     files.sort(key=lambda row:(row[0],row[2].name))
     size=sum(x[1] for x in files)
     count=len(files)
