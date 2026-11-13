@@ -26,6 +26,8 @@ def main():
     p.add_argument("--modes",type=int,default=200)
     p.add_argument("--batch-sizes",type=int,nargs="+",default=[8,16,32])
     p.add_argument("--workers",type=int,default=1)
+    p.add_argument("--fft-backend",choices=("scipy","numpy"),
+                   default="scipy",help="Batched transform backend")
     p.add_argument("--trials",type=int,default=3)
     p.add_argument("--seed",type=int,default=812)
     p.add_argument("--output",type=Path,
@@ -33,7 +35,8 @@ def main():
     args=p.parse_args()
     if (args.pupil_size<8 or args.modes<1 or args.trials<1
             or any(b<1 for b in args.batch_sizes)
-            or args.workers<1):
+            or args.workers<1
+            or (args.fft_backend=="numpy" and args.workers!=1)):
         p.error("Invalid pupil dimensions, FFT batch or iteration count")
     rng=np.random.default_rng(args.seed)
     n=args.pupil_size
@@ -61,6 +64,7 @@ def main():
                 covariance,modes,pupil,n_otf,samp=2,
                 fft_mode=("legacy" if label=="legacy" else "batched"),
                 fft_batch_size=batch,fft_workers=workers,
+                fft_backend=(args.fft_backend if label!="legacy" else "scipy"),
                 fft_diagnostics=diagnostics,
             )
             durations.append(perf_counter()-start)
@@ -89,6 +93,7 @@ def main():
         "kind":"synthetic_Vii_modal_FFT_batching_not_Keck_E2E",
         "pupil_size":n,"mode_count":args.modes,
         "workers":args.workers,"trials":args.trials,
+        "batch_fft_backend":args.fft_backend,
         "float64_fft":True,
         "rtol":1e-12,"atol":1e-12,
         "results":reports,
