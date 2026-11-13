@@ -127,7 +127,7 @@ class frequencyDomain():
 
     def __init__(self, aoSys, kcExt=None, nyquistSampling=False,
                  Hfilter=1, computeFocalAnisoCov=True, dtype=np.float64,
-                 focal_algorithm="legacy"):
+                 focal_algorithm="legacy", focal_cache_dir=None):
 
         self.dtype = dtype
         if self.dtype == np.float32:
@@ -151,6 +151,8 @@ class frequencyDomain():
         if focal_algorithm not in ("legacy", "symmetry"):
             raise ValueError("Unknown focal algorithm: " + str(focal_algorithm))
         self.focal_algorithm = focal_algorithm
+        self.focal_cache_dir = focal_cache_dir
+        self.focal_diagnostics = {}
 
         # MANAGING THE WAVELENGTH
         self.nBin = self.ao.cam.nWvl # number of spectral bins for polychromatic PSFs
@@ -474,7 +476,9 @@ class frequencyDomain():
             anisoplanatism_structure_function(self.ao.tel, self.ao.atm, self.ao.src,
                                               self.ao.lgs, self.ao.ngs, self.nOtf,
                                               self.sampRef, self.ao.dms.nActu1D,
-                                              focal_algorithm=self.focal_algorithm)
+                                              focal_algorithm=self.focal_algorithm,
+                                              focal_cache_dir=self.focal_cache_dir,
+                                              focal_diagnostics=self.focal_diagnostics)
 
             return ( (self.dani_focang + self.dani_tt) \
                      * Cn2[np.newaxis,:,np.newaxis,np.newaxis]).sum(axis=1)
