@@ -176,6 +176,8 @@ def main():
     ap.add_argument("--check-only",action="store_true",
                     help="Check existing case outputs; do not run P3")
     args=ap.parse_args()
+    if args.focal_cache_dir is not None and args.focal_algorithm != "symmetry":
+        ap.error("--focal-cache-dir requires --focal-algorithm symmetry")
     if len(args.fits)!=len(args.sav):
         ap.error("Each FITS requires a matching SAV at the same argument index")
     if len({p.stem for p in args.fits})!=len(args.fits):
