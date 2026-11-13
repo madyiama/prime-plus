@@ -1728,7 +1728,10 @@ def main():
         "ho_fft_mode": args.ho_fft_mode,
         "ho_fft_batch_size": int(args.ho_fft_batch_size),
         "ho_fft_workers": int(args.ho_fft_workers),
-        "ho_fft_backend": args.ho_fft_backend,
+        "ho_fft_backend": (
+            "numpy_legacy" if args.ho_fft_mode=="legacy"
+            else args.ho_fft_backend
+        ),
         "ho_fft_diagnostics": model.ho_fft_diagnostics,
         "ho_covariance_projection_applied": bool(
             getattr(model, "ho_covariance_diagnostics", {}).get(
