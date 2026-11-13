@@ -18,7 +18,7 @@ For each mode k it computes exactly the historical Vii expression:
     buf = buf + lambda[k]*Vk
 
 The only altered operation is FFT evaluation: scipy.fft.fft2 over
-array [y,x,n_modes_in_batch], axes=(0,1), with configurable workers.
+contiguous [n_modes_in_batch,y,x] arrays, axes=(-2,-1), with configurable workers.
 The summation is still done in original increasing eigenmode order.
 Do NOT reduce modes with einsum, change PSD policy, or interpret
 minor roundoff differences as a change in physical covariance.
