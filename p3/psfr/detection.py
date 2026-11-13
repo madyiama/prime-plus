@@ -27,6 +27,11 @@ class SourceCandidate:
     psf_minus_spike_delta_chi2: float
     coverage: float
     classification: str
+    measured_fwhm_px: float | None = None
+    psf_fwhm_ratio: float | None = None
+    shape_correlation: float | None = None
+    delta_bic: float | None = None
+    flux_fraction_of_brightest: float | None = None
 
 
 @dataclass(frozen=True)
@@ -46,6 +51,13 @@ class SourceDetection:
     final_detection_valid_pixels: int
     fit_valid_pixels: np.ndarray
     stopped_reason: str
+    psf_fwhm_px: float
+    fwhm_acceptance_range_px: tuple[float, float]
+    exclusion_radius_px: float
+    min_shape_correlation: float
+    min_relative_flux: float
+    min_bic_improvement: float
+    n_masked_hot_pixel_candidates: int
 
 
 def _robust_sigma_from_differences(image, valid):
@@ -189,6 +201,12 @@ def detect_stellar_sources(
     min_coverage: float = .75,
     max_examined: int = 128,
     refine_positions: bool = True,
+    fwhm_min_ratio: float = .70,
+    fwhm_max_ratio: float = 1.55,
+    min_shape_correlation: float = .78,
+    exclusion_fwhm: float = 2.0,
+    min_relative_flux: float = .03,
+    min_bic_improvement: float = 12.,
 ) -> SourceDetection:
     """Find stars using the PSF shape, not a list of brightest pixels.
 
@@ -231,6 +249,17 @@ def detect_stellar_sources(
         if noise.shape!=data.shape:
             raise ValueError("sigma must have the same shape as image")
         usable &= np.isfinite(noise)&(noise>0)
+    if (not np.isfinite(fwhm_min_ratio) or
+            not np.isfinite(fwhm_max_ratio) or
+            not .2<=fwhm_min_ratio<fwhm_max_ratio<=4. or
+            not np.isfinite(min_shape_correlation) or
+            not 0.<min_shape_correlation<=1. or
+            not np.isfinite(exclusion_fwhm) or exclusion_fwhm<1. or
+            not np.isfinite(min_relative_flux) or
+            not 0.<=min_relative_flux<1. or
+            not np.isfinite(min_bic_improvement) or
+            min_bic_improvement<0.):
+        raise ValueError("Invalid PSF FWHM/morphology/model-selection controls")
     if np.count_nonzero(usable)<25:
         raise ValueError("Too few valid detector pixels for detection")
     initial_background=float(np.median(data[usable]))
@@ -242,13 +271,22 @@ def detect_stellar_sources(
         empirical_sigma=None
         noise_type="user_supplied_sigma"
 
-    radius=int(core_radius_px)
+    psf_fwhm=estimate_psf_fwhm_px(template)
+    fwhm_low=psf_fwhm*fwhm_min_ratio
+    fwhm_high=psf_fwhm*fwhm_max_ratio
+    exclusion_radius=max(min_separation_px,exclusion_fwhm*psf_fwhm)
+    # The local comparison requires a clean outer annulus, and it must
+    # cover the width of the reconstructed PSF rather than an arbitrary
+    # fixed crop. Keep the user-configured radius as a lower bound.
+    radius=max(int(core_radius_px),int(np.ceil(1.9*psf_fwhm)))
     kernel=_psf_core(template,radius)
     k2=(kernel*kernel)[::-1,::-1]
     reversed_kernel=kernel[::-1,::-1]
     full_norm=float(np.sum(kernel**2))
     centre=float(kernel[radius,radius])
     detection_mask=usable.copy()
+    fit_mask=usable.copy()
+    n_masked_hot_pixels=0
     accepted=[]
     rejected=[]
     fitted_positions=[]
@@ -279,7 +317,10 @@ def detect_stellar_sources(
         matched=np.full(data.shape,-np.inf,dtype=float)
         matched[good]=dot[good]/np.sqrt(norm[good])
         for xp,yp in fitted_positions:
-            matched[(xx-xp)**2+(yy-yp)**2<min_separation_px**2]=-np.inf
+            # Residual speckles commonly occur near the bright source.
+            # An FWHM-scaled guard is conservative; close companions
+            # need an explicit second-pass/deblending method.
+            matched[(xx-xp)**2+(yy-yp)**2<exclusion_radius**2]=-np.inf
         loc=np.unravel_index(np.argmax(matched),matched.shape)
         matched_snr=float(matched[loc])
         if not np.isfinite(matched_snr) or matched_snr<min_snr:
@@ -296,16 +337,51 @@ def detect_stellar_sources(
         delta_chi2=matched_snr**2-max(0.,spike_snr)**2
         flux=max(0.,float(dot[y,x]/norm[y,x]))
         coverage=float(norm[y,x]/reference_norm)
-        if halo_snr<min_halo_snr or delta_chi2<=0:
+        width,shape_corr=_candidate_shape_metrics(
+            residual,detection_mask,x,y,kernel,expected_fwhm=psf_fwhm
+        )
+        # 3 new free parameters (flux, x, y) incur a complexity penalty.
+        # With empirical MAD this is a ranking diagnostic, not a calibrated
+        # false-positive probability.
+        n_local=max(2.,np.pi*radius**2*coverage)
+        delta_bic=float(matched_snr**2-3*np.log(n_local))
+        brightest=max(fitted_fluxes,default=0.)
+        relative_flux=float(flux/brightest) if brightest>0 else None
+        if delta_chi2<=0 or halo_snr<min_halo_snr:
             classification=(
                 "hot_pixel_like" if delta_chi2<=0 else
                 "insufficient_psf_wings"
             )
+        elif not np.isfinite(width) or width<fwhm_low:
+            classification="compact_spike_or_speckle"
+        elif width>fwhm_high:
+            classification="extended_halo_or_blend"
+        elif not np.isfinite(shape_corr) or shape_corr<min_shape_correlation:
+            classification="poor_psf_shape_or_speckle"
+        elif relative_flux is not None and relative_flux<min_relative_flux:
+            classification="low_relative_flux_speckle_candidate"
+        elif delta_bic<min_bic_improvement:
+            classification="insufficient_model_evidence"
+        else:
+            classification="star_candidate"
+        if classification!="star_candidate":
             rejected.append(SourceCandidate(
                 (x,y),None,flux,matched_snr,float(halo_snr),
                 float(delta_chi2),coverage,classification,
+                float(width) if np.isfinite(width) else None,
+                float(width/psf_fwhm) if np.isfinite(width) else None,
+                float(shape_corr) if np.isfinite(shape_corr) else None,
+                delta_bic,relative_flux,
             ))
-            detection_mask[y,x]=False
+            # Only explicitly compact/spike-like outliers are masked in
+            # the FINAL fit. A speckle/halo is part of the measured
+            # astrophysical image and must remain in fit residuals.
+            if classification in ("hot_pixel_like","compact_spike_or_speckle"):
+                fit_mask[y,x]=False
+                n_masked_hot_pixels+=1
+            # Suppress near-duplicate candidate locations for search only.
+            # This prevents reporting the same speckle multiple times.
+            detection_mask[(xx-x)**2+(yy-y)**2 <= max(1.,.35*psf_fwhm)**2]=False
             continue
 
         fitted_positions.append((float(x),float(y)))
@@ -335,6 +411,8 @@ def detect_stellar_sources(
             (x,y),tuple(map(float,fitted_positions[-1])),
             float(fitted_fluxes[-1]),matched_snr,float(halo_snr),
             float(delta_chi2),coverage,"star_candidate",
+            float(width),float(width/psf_fwhm),
+            float(shape_corr),delta_bic,relative_flux,
         ))
 
     if attempted>=max_examined and len(accepted)<max_sources:
@@ -347,6 +425,13 @@ def detect_stellar_sources(
         noise_source=noise_type,min_snr=float(min_snr),
         min_halo_snr=float(min_halo_snr),max_sources=int(max_sources),
         examined_candidates=attempted,input_valid_pixels=int(usable.sum()),
-        final_detection_valid_pixels=int(detection_mask.sum()),
-        fit_valid_pixels=detection_mask.copy(),stopped_reason=stop,
+        final_detection_valid_pixels=int(fit_mask.sum()),
+        fit_valid_pixels=fit_mask.copy(),stopped_reason=stop,
+        psf_fwhm_px=float(psf_fwhm),
+        fwhm_acceptance_range_px=(float(fwhm_low),float(fwhm_high)),
+        exclusion_radius_px=float(exclusion_radius),
+        min_shape_correlation=float(min_shape_correlation),
+        min_relative_flux=float(min_relative_flux),
+        min_bic_improvement=float(min_bic_improvement),
+        n_masked_hot_pixel_candidates=int(n_masked_hot_pixels),
     )
