@@ -19,33 +19,42 @@ from scipy import fft as scipy_fft
 MAX_BATCH_WORK_BYTES = 256 * 1024 * 1024
 
 
-def validate_fft_options(mode, batch_size, workers):
+def validate_fft_options(mode, batch_size, workers, backend="scipy"):
     if mode not in ("legacy", "batched"):
         raise ValueError("HO FFT mode must be 'legacy' or 'batched'")
+    if backend not in ("scipy","numpy"):
+        raise ValueError("HO FFT backend must be 'scipy' or 'numpy'")
     if (not isinstance(batch_size, (int, np.integer))
             or isinstance(batch_size, (bool, np.bool_)) or batch_size<1):
         raise ValueError("HO FFT batch_size must be a positive integer")
     if (not isinstance(workers, (int, np.integer))
             or isinstance(workers, (bool, np.bool_)) or workers<1):
         raise ValueError("HO FFT workers must be a positive integer")
-    if mode=="legacy" and (int(batch_size)!=16 or int(workers)!=1):
+    if mode=="legacy" and (
+        int(batch_size)!=16 or int(workers)!=1 or backend!="scipy"
+    ):
         raise ValueError(
-            "Non-default FFT batch_size/workers require HO FFT mode batched"
+            "Non-default FFT batch_size/workers/backend require HO FFT mode batched"
         )
+    if mode=="batched" and backend=="numpy" and workers!=1:
+        raise ValueError("NumPy HO FFT backend supports workers=1 only")
 
 
 def accumulate_vii_batched(
     modes_padded, eigenvalues, pupil_fft_conjugate, *,
-    batch_size=16, workers=1, diagnostics=None,
+    batch_size=16, workers=1, backend="scipy", diagnostics=None,
 ):
     """Return the legacy Vii frequency-domain sum, before IFFT.
 
     Input modes already incorporate CURRENT pupil mask, rotation and
     sampling. No result is reused between distinct calls.
-    Both fft2 operations transform spatial axes (0,1), never the modal
-    axis (2). Memory guard avoids large temporary NumPy/SciPy arrays.
+    Both fft2 operations transform the final two spatial axes of the
+    contiguous mode-first slab, never its modal axis. Switching to the
+    original NumPy pocketfft backend can recover bitwise-equivalent
+    per-mode FFTs when SciPy's implementation differs at roundoff.
+    Memory guard avoids large temporary NumPy/SciPy arrays.
     """
-    validate_fft_options("batched",batch_size,workers)
+    validate_fft_options("batched",batch_size,workers,backend)
     modes=np.asarray(modes_padded)
     weights=np.asarray(eigenvalues)
     conj=np.asarray(pupil_fft_conjugate)
@@ -78,8 +87,12 @@ def accumulate_vii_batched(
         # (0,1) is strided and can be SLOWER than the original loop.
         # This is a temporary local copy of the CURRENT pupil modes.
         slab=np.moveaxis(modes[:,:,begin:end],-1,0).copy(order="C")
-        fft_modes=scipy_fft.fft2(slab,axes=(-2,-1),workers=int(workers))
-        fft_squares=scipy_fft.fft2(slab**2,axes=(-2,-1),workers=int(workers))
+        if backend=="numpy":
+            fft_modes=np.fft.fft2(slab,axes=(-2,-1))
+            fft_squares=np.fft.fft2(slab**2,axes=(-2,-1))
+        else:
+            fft_modes=scipy_fft.fft2(slab,axes=(-2,-1),workers=int(workers))
+            fft_squares=scipy_fft.fft2(slab**2,axes=(-2,-1),workers=int(workers))
         for i,k in enumerate(range(begin,end)):
             # Preserve original per-mode expression and accumulation ORDER:
             # no einsum, BLAS sum reduction or double counting.
@@ -90,6 +103,7 @@ def accumulate_vii_batched(
     if diagnostics is not None:
         diagnostics.update({
             "mode":"batched",
+            "fft_backend":backend,
             "batch_size":int(batch_size),
             "workers":int(workers),
             "mode_count":int(weights.size),
