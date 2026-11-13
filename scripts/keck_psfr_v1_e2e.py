@@ -169,6 +169,13 @@ def main():
     ap.add_argument("--focal-cache-dir",type=Path,default=None,
                     help="Disk cache ONLY for unfiltered symmetric focal SF; "
                          "rotation-dependent pupil and OTF are never cached")
+    ap.add_argument("--ho-fft-mode",choices=("legacy","batched"),
+                    default="legacy",
+                    help="Experimental HO Vii batched FFT; default legacy")
+    ap.add_argument("--ho-fft-batch-size",type=int,default=16,
+                    help="Number of modes per batched FFT, default 16")
+    ap.add_argument("--ho-fft-workers",type=int,default=1,
+                    help="SciPy FFT workers, default 1")
     ap.add_argument("--profile-psfr",action="store_true",
                     help="Optional PSF-R cProfile; timing overhead is expected")
     ap.add_argument("--export-ao-basis",action="store_true",
@@ -176,6 +183,13 @@ def main():
     ap.add_argument("--check-only",action="store_true",
                     help="Check existing case outputs; do not run P3")
     args=ap.parse_args()
+    from p3.psfr.hoBatched import validate_fft_options
+    try:
+        validate_fft_options(
+            args.ho_fft_mode,args.ho_fft_batch_size,args.ho_fft_workers
+        )
+    except ValueError as exc:
+        ap.error(str(exc))
     if args.focal_cache_dir is not None and args.focal_algorithm != "symmetry":
         ap.error("--focal-cache-dir requires --focal-algorithm symmetry")
     if len(args.fits)!=len(args.sav):
@@ -195,6 +209,9 @@ def main():
         "focal_anisoplanatism_algorithm":args.focal_algorithm,
         "focal_cache_configured":bool(args.focal_cache_dir is not None),
         "cprofile_enabled":bool(args.profile_psfr),
+        "ho_fft_mode":args.ho_fft_mode,
+        "ho_fft_batch_size":args.ho_fft_batch_size,
+        "ho_fft_workers":args.ho_fft_workers,
         "cases":[],
     }
     failures=0
@@ -224,6 +241,10 @@ def main():
                             str(args.focal_cache_dir.resolve())))
             if args.profile_psfr:
                 cmd.append("--profile-psfr")
+            if args.ho_fft_mode=="batched":
+                cmd.extend(("--ho-fft-mode","batched",
+                            "--ho-fft-batch-size",str(args.ho_fft_batch_size),
+                            "--ho-fft-workers",str(args.ho_fft_workers)))
             if args.export_ao_basis:
                 cmd.append("--export-ao-basis")
             if args.focal_algorithm != "legacy":
