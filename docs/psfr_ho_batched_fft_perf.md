@@ -73,6 +73,46 @@ Output: results/compare_keck_ho_fft.json. The comparator checks:
 - the full 128x128x3 telemetry_only_psf.npy cube at same tolerances;
 - HO-specific and overall PSF-R initialization speedups.
 
+## 3. Exact numerical parity recovery: NumPy-batched FFT
+
+The user's first real Keck n0120 A/B measured the following:
+- SciPy batched HO SF 11.263 s -> 7.834 s, PSF-R init
+  28.054 s -> 24.920 s, with 441 eigenmodes and batch_size 16.
+- Science PSF parity PASS: maximum absolute pixel delta 4.34e-19.
+- **HO SF parity FAIL at the specified absolute 1e-12 tolerance**:
+  max delta 1.154e-11 (relative L2 6.90e-13). This is plausibly
+  FFT implementation roundoff amplified during phase SF recovery,
+  not scientific evidence to discard the stricter acceptance gate.
+
+The experimental --ho-fft-backend numpy variant performs the same
+contiguous batched transforms with NumPy pocketfft, the SAME FFT
+backend used by the historical per-mode code. In local isolated
+FFT tests, the NumPy batch outputs were bitwise identical. We now
+also require bitwise OTF/SF output in synthetic unit tests; real
+Keck must be tested before a precision or speed claim.
+
+If results/ho_fft_legacy/n0120 is already available from an
+unchanged physical configuration, run ONLY the NumPy experiment:
+
+    uv run python scripts/keck_psfr_v1_e2e.py \
+      --fits "/Users/obm/Documents/KECK DATA/20201202/IMAG/n0120.fits" \
+      --sav "/Users/obm/Documents/KECK DATA/20201202/TRS/n0120_LGS_trs.sav" \
+      --calib p3/aoSystem/data/KECK_CALIBRATION \
+      --config config/psfr_keck_v1.toml \
+      --output results/ho_fft_batched_numpy \
+      --focal-algorithm symmetry \
+      --ho-fft-mode batched --ho-fft-backend numpy \
+      --ho-fft-batch-size 16 --ho-fft-workers 1
+
+    uv run python scripts/compare_keck_ho_fft_runs.py \
+      --legacy results/ho_fft_legacy/n0120 \
+      --batched results/ho_fft_batched_numpy/n0120 \
+      --output results/compare_keck_ho_fft_numpy.json
+
+Do not claim improvement if the NumPy variant is slower or fails
+the dual SF and PSF strict-numerical acceptance checks. The SciPy
+path remains separately selectable for future accuracy studies.
+
 A parity failure means STOP, not a reason to increase tolerance.
 For a cache-hot comparison, prewarm the geometric cache once, then
 repeat BOTH modes with the SAME --focal-cache-dir path; verify
