@@ -13,6 +13,7 @@ from .chromatic import (PupilLagGrid, MonochromaticResult,
 from .template import (PSFTemplate, template_from_psfr,
                        save_psfr_template, load_psfr_template)
 from .stellar import (StellarFitResult, render_stellar_scene, fit_stellar_scene)
+from .detection import (SourceCandidate, SourceDetection, detect_stellar_sources)
 
 __all__ = [
     "PSFProduct", "normalize_psf",
@@ -25,4 +26,5 @@ __all__ = [
     "PSFTemplate", "template_from_psfr",
     "save_psfr_template", "load_psfr_template",
     "StellarFitResult", "render_stellar_scene", "fit_stellar_scene",
+    "SourceCandidate", "SourceDetection", "detect_stellar_sources",
 ]
