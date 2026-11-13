@@ -376,7 +376,12 @@ def detect_stellar_sources(
             # Only explicitly compact/spike-like outliers are masked in
             # the FINAL fit. A speckle/halo is part of the measured
             # astrophysical image and must remain in fit residuals.
-            if classification in ("hot_pixel_like","compact_spike_or_speckle"):
+            if (classification=="hot_pixel_like" or
+                    (classification=="compact_spike_or_speckle" and
+                     np.isfinite(width) and width<=1.5)):
+                # Reject a convincing detector impulse from final fitting.
+                # Wider speckles are astrophysical residual structure,
+                # not a license to delete pixels from the measurement.
                 fit_mask[y,x]=False
                 n_masked_hot_pixels+=1
             # Suppress near-duplicate candidate locations for search only.
