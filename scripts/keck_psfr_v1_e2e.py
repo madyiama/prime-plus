@@ -176,6 +176,10 @@ def main():
                     help="Number of modes per batched FFT, default 16")
     ap.add_argument("--ho-fft-workers",type=int,default=1,
                     help="SciPy FFT workers, default 1")
+    ap.add_argument("--ho-fft-backend",choices=("scipy","numpy"),
+                    default="scipy",
+                    help="Numerical FFT backend for HO batches; NumPy "
+                         "tests strict parity vs historical NumPy FFT")
     ap.add_argument("--profile-psfr",action="store_true",
                     help="Optional PSF-R cProfile; timing overhead is expected")
     ap.add_argument("--export-ao-basis",action="store_true",
@@ -186,7 +190,8 @@ def main():
     from p3.psfr.hoBatched import validate_fft_options
     try:
         validate_fft_options(
-            args.ho_fft_mode,args.ho_fft_batch_size,args.ho_fft_workers
+            args.ho_fft_mode,args.ho_fft_batch_size,args.ho_fft_workers,
+            args.ho_fft_backend,
         )
     except ValueError as exc:
         ap.error(str(exc))
@@ -212,6 +217,7 @@ def main():
         "ho_fft_mode":args.ho_fft_mode,
         "ho_fft_batch_size":args.ho_fft_batch_size,
         "ho_fft_workers":args.ho_fft_workers,
+        "ho_fft_backend":args.ho_fft_backend,
         "cases":[],
     }
     failures=0
@@ -244,7 +250,8 @@ def main():
             if args.ho_fft_mode=="batched":
                 cmd.extend(("--ho-fft-mode","batched",
                             "--ho-fft-batch-size",str(args.ho_fft_batch_size),
-                            "--ho-fft-workers",str(args.ho_fft_workers)))
+                            "--ho-fft-workers",str(args.ho_fft_workers),
+                            "--ho-fft-backend",args.ho_fft_backend))
             if args.export_ao_basis:
                 cmd.append("--export-ao-basis")
             if args.focal_algorithm != "legacy":
