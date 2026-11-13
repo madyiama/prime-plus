@@ -687,11 +687,31 @@ def main():
              "on symmetry path; never cache rotated pupil, OTF, HO or TT.",
     )
     parser.add_argument(
+        "--ho-fft-mode", choices=("legacy","batched"), default="legacy",
+        help="HO Vii Fourier evaluator: unchanged NumPy per-mode baseline "
+             "or experimental SciPy batched transforms.",
+    )
+    parser.add_argument(
+        "--ho-fft-batch-size",type=int,default=16,
+        help="Modes per HO Fourier batch (default 16, batched mode only).",
+    )
+    parser.add_argument(
+        "--ho-fft-workers",type=int,default=1,
+        help="SciPy FFT worker threads (default 1, batched mode only).",
+    )
+    parser.add_argument(
         "--profile-psfr",action="store_true",
         help="Opt-in cProfile of psfR initialization; saves .pstats and "
              "top cumulative functions (profiled wall time has overhead).",
     )
     args = parser.parse_args()
+    from p3.psfr.hoBatched import validate_fft_options
+    try:
+        validate_fft_options(
+            args.ho_fft_mode,args.ho_fft_batch_size,args.ho_fft_workers
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
     if args.focal_cache_dir is not None and args.focal_algorithm != "symmetry":
         parser.error("--focal-cache-dir requires --focal-algorithm symmetry")
     if args.p3_pupil_parity != "native" and args.p3_pupil_resampling != "physical_binary":
@@ -1099,6 +1119,9 @@ def main():
             tt_axis_parity=args.tt_axis_parity,
             focal_algorithm=args.focal_algorithm,
             focal_cache_dir=args.focal_cache_dir,
+            ho_fft_mode=args.ho_fft_mode,
+            ho_fft_batch_size=args.ho_fft_batch_size,
+            ho_fft_workers=args.ho_fft_workers,
         )
 
     if args.profile_psfr:
@@ -1129,6 +1152,7 @@ def main():
             "anisoplanatism":float(model.freq.tani),
         },
         "focal_geometric_kernel":model.freq.focal_diagnostics,
+        "ho_fft":model.ho_fft_diagnostics,
         "fourier_model_internal_ms":{
             k:float(getattr(model.fao,k))
             for k in (
@@ -1688,6 +1712,10 @@ def main():
             model.tt_kernel_dphi_multiplier_vs_noll
         ),
         "ho_covariance_policy": args.ho_covariance_policy,
+        "ho_fft_mode": args.ho_fft_mode,
+        "ho_fft_batch_size": int(args.ho_fft_batch_size),
+        "ho_fft_workers": int(args.ho_fft_workers),
+        "ho_fft_diagnostics": model.ho_fft_diagnostics,
         "ho_covariance_projection_applied": bool(
             getattr(model, "ho_covariance_diagnostics", {}).get(
                 "projection_applied", False
