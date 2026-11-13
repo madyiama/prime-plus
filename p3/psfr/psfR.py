@@ -56,6 +56,29 @@ def _sqrt_checked_variance(variance, label):
     return np.sqrt(variance)
 
 
+def _psfr_memory_checkpoint(stage):
+    """Container RSS tracing for SIGKILL diagnostics; never alters science data.
+
+    Linux's /proc/self/status reports live resident memory, unlike
+    cumulative ru_maxrss. An unobservable platform is labelled unknown.
+    This emits one short, flushed line per P3 initialization stage so
+    an OS kill leaves the last reached stage visible in the child log.
+    """
+    rss_mb = None
+    try:
+        with open("/proc/self/status", encoding="ascii") as status:
+            for line in status:
+                if line.startswith("VmRSS:"):
+                    rss_mb = float(line.split()[1]) / 1024
+                    break
+    except (OSError, ValueError, IndexError):
+        pass
+    if rss_mb is None:
+        print(f"[psfR memory] {stage}: RSS unavailable", flush=True)
+    else:
+        print(f"[psfR memory] {stage}: RSS={rss_mb:.1f} MiB", flush=True)
+
+
 def _integrate_spectral_psf(psf):
     """Combine spectral slices into the 2-D broadband image for a Strehl check."""
     if psf.ndim == 2:
@@ -126,7 +149,9 @@ class psfR:
             )
         self.ho_covariance_policy = ho_covariance_policy
         self.ho_covariance_diagnostics = {}
+        _psfr_memory_checkpoint("aoSystem start")
         self.ao = aoSystem(self.path_ini, path_root=path_root)
+        _psfr_memory_checkpoint("aoSystem done")
 
         # defining the number of model parameters
         self.tag = 'PSF-R'
@@ -153,29 +178,39 @@ class psfR:
             #val_act = np.argwhere(modes.max(axis=0)==0)
             self.Hfilter = np.dot(modes, modes.T)
 
+        _psfr_memory_checkpoint("frequencyDomain start")
         self.freq = frequencyDomain(self.ao, Hfilter=self.Hfilter)
         self.fao = fourierModel(self.path_ini, calcPSF=False, display=False,
                                 freq=self.freq, ao=self.ao)
+        _psfr_memory_checkpoint("frequencyDomain done")
 
         self.t_freq = 1000*(time.time() - tstart) - self.t_initAO
 
         # INSTANTIATING THE FITTING PHASE STRUCTURE FUNCTION FOR r0=1m
+        _psfr_memory_checkpoint("DM fitting SF start")
         self.dphi_fit = self.fitting_phase_structure_function(1)
+        _psfr_memory_checkpoint("DM fitting SF done")
         self.t_dfit = 1000*(time.time() - tstart) - self.t_freq
 
         # INSTANTIATING THE ALIASING PHASE STRUCTURE FUNCTION FOR r0=1m
+        _psfr_memory_checkpoint("aliasing SF start")
         self.dphi_alias = self.aliasing_phase_structure_function(1)
+        _psfr_memory_checkpoint("aliasing SF done")
         self.t_dalias = 1000*(time.time() - tstart) - self.t_dfit
 
         # INSTANTIATING THE TT RESIDUAL PHASE STRUCTURE FUNCTION IN LGS MODE
+        _psfr_memory_checkpoint("TT jitter SF start")
         if compute_dphi_jitter:
             self.dphi_tt = self.jitter_phase_structure_function()
         else:
             self.dphi_tt = 0*self.dphi_fit
+        _psfr_memory_checkpoint("TT jitter SF done")
         self.t_dtt = 1000*(time.time() - tstart) - self.t_dalias
 
         # INSTANTIATING THE AO RESIDUAL PHASE STRUCTURE FUNCTION
+        _psfr_memory_checkpoint("HO residual Vii start")
         self.dphi_ao = self.residual_phase_structure_function()
+        _psfr_memory_checkpoint("HO residual Vii done")
         self.t_dao = 1000*(time.time() - tstart) - self.t_dtt
 
         # INSTANTIATING THE ANISOPLANATISM PHASE STRUCTURE FUNCTION IF ANY
@@ -195,7 +230,9 @@ class psfR:
             self.otfPixel = 1.0
 
         # COMPUTING THE ERROR BREAKDOWN:
+        _psfr_memory_checkpoint("error budget start")
         self.get_error_breakdown()
+        _psfr_memory_checkpoint("error budget done")
 
          # DEFINING BOUNDS
         self.bounds = self.define_bounds()
