@@ -127,3 +127,65 @@ model is not yet integrated or scientifically validated on Keck.
 
     uv run --with pytest python -m pytest -q tests/test_psfr_detection.py
     uv run --with pytest python -m pytest -q
+
+
+## FWHM/speckle selection (second iteration)
+
+Early real-data feedback: eight candidates were reported for an
+observation expected to contain roughly two stars. The former
+matched-PSF-SNR + wing criterion is insufficient for coherent AO
+speckles and halo subtraction errors. Do not hardcode "2" from
+visual inspection; retain adjustable criteria and a full audit.
+
+New conservative gates:
+- Measure PSF-R core FWHM from the area of its 8-connected
+  half-maximum region, width = 2*sqrt(area/pi) [pixels], on the
+  actual normalized PSF-R detector template (not a Gaussian guess).
+- Measure the candidate FWHM in the residual cutout using the
+  SAME estimator after subtracting a local outer-annulus level.
+- Require candidate width between 0.70 and 1.55 times PSF FWHM.
+  The interval is intentionally approximate and not a physical
+  confidence interval.
+- Require positive PSF-core shape correlation >= 0.78.
+- Exclude further detections within max(min_separation_px,
+  2.0 * PSF_FWHM) from already accepted stellar centres.
+  Such a mask may also hide genuine close companions.
+- Require a candidate's fitted PSF amplitude >= 3% of the
+  brightest accepted source (unless it is the first).
+  This contrast gate biases against faint companions; it is not
+  a completeness-calibrated magnitude threshold.
+- Require a penalized model-improvement score delta_BIC >= 12,
+  heuristically computed from matched SNR and a 3-parameter
+  complexity penalty. Without detector-calibrated --sigma,
+  DO NOT treat this as a formally calibrated Bayesian criterion.
+- Keep hotspot rejection separate from speckle rejection:
+  only near-delta-like artifacts are masked in the final fit.
+  Rejected broader speckles stay in observation/fitting residuals,
+  but are excluded from further source search to prevent repeated
+  counting.
+
+CLI tuning:
+
+    uv run python scripts/fit_psfr_stars.py \
+      --case results/psfr_v1_fit/n0120 --detect-only \
+      --fwhm-min-ratio 0.7 --fwhm-max-ratio 1.55 \
+      --min-shape-correlation 0.78 \
+      --exclusion-fwhm 2.0 \
+      --min-relative-flux 0.03 \
+      --min-bic-improvement 12 \
+      --max-sources 8
+
+The catalogue includes:
+- template PSF FWHM in pixels, candidate widths/ratios,
+  local shape correlation, fitted flux ratio and penalized score;
+- rejected-candidate class, search stopping rule and exclusion radius;
+- the number of actual hot-pixel-like centres masked from fitting.
+The overlay plots one FWHM-size circle on accepted stars and reports
+the exclusion radius.
+
+A speckle can have nearly the same FWHM as a diffraction-limited
+stellar core. This morphology-based method cannot guarantee the
+correct astrophysical source count. A stricter model would jointly
+fit competing source-count hypotheses and compare residuals with
+spatially correlated AO-speckle noise; validate on Keck real data
+and injection/recovery experiments before calibration claims.
