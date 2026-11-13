@@ -103,6 +103,7 @@ def reconstruct_ho_otf(
     fft_mode: str = "legacy",
     fft_batch_size: int = 16,
     fft_workers: int = 1,
+    fft_backend: str = "scipy",
     fft_diagnostics: MutableMapping | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Return (OTF, phase SF rad**2) using the UNCHANGED legacy Vii/Uij kernel.
@@ -118,5 +119,6 @@ def reconstruct_ho_otf(
         covariance_psd_policy=covariance_psd_policy,
         covariance_diagnostics=covariance_diagnostics,
         fft_mode=fft_mode,fft_batch_size=fft_batch_size,
-        fft_workers=fft_workers,fft_diagnostics=fft_diagnostics,
+        fft_workers=fft_workers,fft_backend=fft_backend,
+        fft_diagnostics=fft_diagnostics,
     )
