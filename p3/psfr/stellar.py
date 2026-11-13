@@ -186,7 +186,11 @@ def fit_stellar_scene(
         peak=float(template.image.max())
         flux_initial=[]
         for x,y in starts:
-            pixel=float(data[int(np.rint(y)),int(np.rint(x))])
+            iy = min(ny-1, max(0, int(np.rint(y))))
+            ix = min(nx-1, max(0, int(np.rint(x))))
+            pixel=float(data[iy,ix])
+            if not np.isfinite(pixel):
+                pixel=float(np.median(data[valid]))
             flux_initial.append(max(1e-12,(pixel-bg)/peak))
         flux_initial=np.asarray(flux_initial,dtype=float)
     else:
