@@ -140,3 +140,35 @@ def test_psfr_ho_adapter_forwards_batch_to_existing_kernel():
     np.testing.assert_allclose(actual,expected,rtol=1e-12,atol=1e-12)
     assert model.ho_fft_diagnostics["batch_count"]==2
     assert model.ho_fft_diagnostics["mode"]=="batched"
+
+
+
+@pytest.mark.parametrize("n_modes,batch_size",[(1,1),(7,4),(33,8)])
+def test_numpy_batched_fft_is_bitwise_legacy_for_identical_pupil(
+    n_modes,batch_size,
+):
+    """NumPy vs SciPy backend precision diagnostic, not looser tolerances.
+
+    Legacy uses np.fft.fft2 independently for every spatial mode.
+    NumPy's batched calls should reproduce the same per-plane
+    pocketfft results and the original modal accumulation order.
+    """
+    cov,modes,pupil=_inputs(n=12,nm=n_modes,seed=501+n_modes)
+    baseline=modes2Otf(cov,modes,pupil,24,fft_mode="legacy")
+    diag={}
+    batched=modes2Otf(
+        cov,modes,pupil,24,fft_mode="batched",
+        fft_backend="numpy",fft_batch_size=batch_size,
+        fft_workers=1,fft_diagnostics=diag,
+    )
+    np.testing.assert_array_equal(batched[0],baseline[0])
+    np.testing.assert_array_equal(batched[1],baseline[1])
+    assert diag["fft_backend"]=="numpy"
+
+
+def test_numpy_batched_fft_rejects_unsupported_worker_pool():
+    from p3.psfr.hoBatched import validate_fft_options
+    with pytest.raises(ValueError,match="workers=1"):
+        validate_fft_options("batched",16,2,backend="numpy")
+    with pytest.raises(ValueError,match="backend"):
+        validate_fft_options("batched",16,1,backend="inexact")
