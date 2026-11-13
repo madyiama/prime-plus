@@ -126,7 +126,8 @@ class frequencyDomain():
         self._phaseMap = val
 
     def __init__(self, aoSys, kcExt=None, nyquistSampling=False,
-                 Hfilter=1, computeFocalAnisoCov=True, dtype=np.float64):
+                 Hfilter=1, computeFocalAnisoCov=True, dtype=np.float64,
+                 focal_algorithm="legacy"):
 
         self.dtype = dtype
         if self.dtype == np.float32:
@@ -147,6 +148,9 @@ class frequencyDomain():
             self.kcExt = None
 
         self.Hfilter = Hfilter
+        if focal_algorithm not in ("legacy", "symmetry"):
+            raise ValueError("Unknown focal algorithm: " + str(focal_algorithm))
+        self.focal_algorithm = focal_algorithm
 
         # MANAGING THE WAVELENGTH
         self.nBin = self.ao.cam.nWvl # number of spectral bins for polychromatic PSFs
@@ -469,7 +473,8 @@ class frequencyDomain():
             self.dani_focang, self.dani_ang, self.dani_tt = \
             anisoplanatism_structure_function(self.ao.tel, self.ao.atm, self.ao.src,
                                               self.ao.lgs, self.ao.ngs, self.nOtf,
-                                              self.sampRef, self.ao.dms.nActu1D)
+                                              self.sampRef, self.ao.dms.nActu1D,
+                                              focal_algorithm=self.focal_algorithm)
 
             return ( (self.dani_focang + self.dani_tt) \
                      * Cn2[np.newaxis,:,np.newaxis,np.newaxis]).sum(axis=1)
