@@ -676,6 +676,11 @@ def main():
         help="Save frozen AO SF/OTF kernels for independent constrained AO "
              "fitting; require strict nominal Keck PSF parity.",
     )
+    parser.add_argument(
+        "--focal-algorithm",choices=("legacy", "symmetry"),default="legacy",
+        help="Focal anisoplanatism covariance evaluation: historical (default) "
+             "or opt-in six-term algebraic symmetry (requires Keck parity check)",
+    )
     args = parser.parse_args()
     if args.p3_pupil_parity != "native" and args.p3_pupil_resampling != "physical_binary":
         parser.error("--p3-pupil-parity flip_x/flip_y requires physical_binary")
@@ -1079,6 +1084,7 @@ def main():
         tt_kernel_convention=args.tt_kernel_convention,
         tt_axis_angle_deg=args.tt_axis_angle_deg,
         tt_axis_parity=args.tt_axis_parity,
+        focal_algorithm=args.focal_algorithm,
     ))
 
     # Telescope applies PupilResampling to the archived pupil at OTF build
@@ -1577,6 +1583,9 @@ def main():
         "camera_pixel_scale_mas": float(model.ao.cam.psInMas),
         "observed_cutout_file": "observed_nirc2_cutout.npy",
         "observed_cutout_origin": "telemetryKeck.trs.cam.image",
+        "focal_anisoplanatism_algorithm": args.focal_algorithm,
+        "focal_anisoplanatism_elapsed_s": float(model.freq.tani)/1000.0,
+        "psfr_total_init_elapsed_s": float(model.t_init)/1000.0,
         "ao_fit_basis_exported": bool(args.export_ao_basis),
         "ao_fit_basis_file": ("ao_fit_basis.npz" if args.export_ao_basis else None),
         "ao_fit_basis_parity": (
