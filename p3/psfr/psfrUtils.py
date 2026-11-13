@@ -219,16 +219,24 @@ def modes2Otf(Cmm, modes, pupil, n_otf, samp=2, basis='Vii',
             )
         ss = np.clip(eigenvalues, 0, None)
         nModes = len(ss)
-        M_all = np.dot(modes, eigenvectors)
-        M_all = M_all.reshape(n_pup, n_pup, nModes)
-        M_all = FourierUtils.enlargeSupport(M_all, samp)*pup_pad[:, :, np.newaxis]
 
+        # Memory bound: construct one eigenmode at a time. Previously
+        # modes @ eigenvectors was expanded to a 3-D padded pupil cube
+        # before the loop, costing ~8*(samp*n_pup)**2*nModes bytes plus
+        # several materialised intermediates. At Keck sampling this can
+        # trigger an OS SIGKILL before a Python exception can be emitted.
+        #
+        # The Vii Fourier algebra, eigenvalue policy, pupil mask and
+        # accumulation order remain unchanged. Do NOT regularize Cmm or
+        # change the noise subtraction as a remedy for memory pressure.
         buf = np.zeros_like(G)
         for k in range(nModes):
-            Mk = M_all[:, :, k]
-            # Vii computation
+            projected_mode = np.dot(modes, eigenvectors[:, k])
+            Mk = FourierUtils.enlargeSupport(
+                projected_mode.reshape(n_pup, n_pup), samp
+            ) * pup_pad
+            # Vii computation: identical 2-D eigenmode as M_all[:, :, k].
             Vk = np.real(fft.fft2(Mk**2)*conj_pup) - abs(fft.fft2(Mk))**2
-            # Summing modes into dm basis
             buf = buf + ss[k] * Vk
 
         dphi = den*fft.fftshift(np.real(fft.ifft2(2*buf)))
