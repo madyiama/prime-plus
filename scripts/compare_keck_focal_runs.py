@@ -34,8 +34,8 @@ def compare(legacy: Path, symmetry: Path, *, rtol=1e-12, atol=1e-12):
     parity=bool(np.allclose(a,b,rtol=rtol,atol=atol))
     baseline=float(meta_a["psfr_total_init_elapsed_s"])
     optimized=float(meta_b["psfr_total_init_elapsed_s"])
-    focal_a=float(meta_a["focal_anisoplanatism_elapsed_s"])
-    focal_b=float(meta_b["focal_anisoplanatism_elapsed_s"])
+    focal_a=float(meta_a["frequency_anisoplanatism_elapsed_s"])
+    focal_b=float(meta_b["frequency_anisoplanatism_elapsed_s"])
     return {
         "kind":"real_Keck_E2E_focal_covariance_non_regression",
         "legacy_case":str(legacy),
