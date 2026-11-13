@@ -159,3 +159,35 @@ def test_lgs_dispatch_passes_algorithm_without_affecting_angular_terms(
     np.testing.assert_allclose(
         symmetry[0],legacy[0],rtol=1e-12,atol=2e-11
     )
+
+
+
+@pytest.mark.parametrize("shape",[(1,), (1,1)])
+def test_numpy_singleton_lgs_height_matches_scalar_legacy_and_symmetry(shape):
+    """Reproduce n0120 failure: Keck stores gs.height as a NumPy array.
+
+    Both pathways must give the same layer SF as the scalar-height
+    calculation, without modifying the physical height or direction.
+    """
+    tel,atm,src,gs=_fake_system(n_layers=3,l0=25.)
+    baseline=focal_angular_function(
+        tel,atm,src,gs,4,48,2.,covariance_algorithm="legacy",
+    )
+    gs.height=np.full(shape,90000.,dtype=float)
+    legacy=focal_angular_function(
+        tel,atm,src,gs,4,48,2.,covariance_algorithm="legacy",
+    )
+    accelerated=focal_angular_function(
+        tel,atm,src,gs,4,48,2.,covariance_algorithm="symmetry",
+    )
+    np.testing.assert_allclose(legacy,baseline,rtol=1e-12,atol=2e-11)
+    np.testing.assert_allclose(accelerated,legacy,rtol=1e-12,atol=2e-11)
+
+
+def test_multivalued_lgs_height_does_not_silently_choose_a_beacon():
+    from p3.aoSystem.focalFast import _single_real_scalar
+    with pytest.raises(ValueError,match="exactly one"):
+        _single_real_scalar(np.array([85000.,90000.]),name="cone_fraction")
+    with pytest.raises(ValueError,match="exactly one"):
+        _single_real_scalar(np.empty((0,)),name="theta_shift_x_m")
+    assert _single_real_scalar(np.array([[.2]]),name="cone_fraction")==.2
