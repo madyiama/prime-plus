@@ -225,7 +225,21 @@ def main():
                 entry["status"]="reconstruction_failed"
                 entry["log"]=str(destination/"psfr_v1_run.log")
                 report["cases"].append(entry)
-                print("[PSFR V1] FAIL:",entry["log"],flush=True)
+                print("[PSFR V1] FAIL:",entry["log"],
+                      "returncode=",result.returncode,flush=True)
+                # Surface the traceback: without this, the parent merely
+                # prints FAIL and conceals the underlying Keck exception.
+                # Preserve the entire diagnostic in psfr_v1_run.log.
+                try:
+                    tail=(destination/"psfr_v1_run.log").read_text(
+                        encoding="utf-8",errors="replace"
+                    ).splitlines()[-65:]
+                    print("[PSFR V1] ---- last 65 log lines ----",flush=True)
+                    print("\n".join(tail),flush=True)
+                    print("[PSFR V1] ---- end log ----",flush=True)
+                    entry["log_tail"]=tail
+                except OSError as err:
+                    print("[PSFR V1] log unreadable:",err,flush=True)
                 continue
         try:
             entry.update(validate_run(destination))
