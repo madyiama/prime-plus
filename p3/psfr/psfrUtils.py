@@ -108,7 +108,7 @@ def mkotf_indpts(nU1d,nPh,u1D,loc,dp):
 def modes2Otf(Cmm, modes, pupil, n_otf, samp=2, basis='Vii',
               covariance_psd_policy='strict', covariance_diagnostics=None,
               fft_mode='legacy', fft_batch_size=16, fft_workers=1,
-              fft_diagnostics=None):
+              fft_backend='scipy', fft_diagnostics=None):
     """
     Computes the OTF and phase structure function from the covariance matrix
     of given coeffcients and the corresponding modal basis.
@@ -123,7 +123,7 @@ def modes2Otf(Cmm, modes, pupil, n_otf, samp=2, basis='Vii',
         - otf, the nOtf x nOtf optical transfer function
         - dphi, the corresponding phase structure function in rad**2
     """
-    validate_fft_options(fft_mode,fft_batch_size,fft_workers)
+    validate_fft_options(fft_mode,fft_batch_size,fft_workers,fft_backend)
     if fft_mode=="batched" and basis!="Vii":
         raise ValueError("Batched HO FFT only supports the Vii modal basis")
     if fft_diagnostics is not None:
@@ -131,6 +131,7 @@ def modes2Otf(Cmm, modes, pupil, n_otf, samp=2, basis='Vii',
             "mode":fft_mode,
             "batch_size":int(fft_batch_size),
             "workers":int(fft_workers),
+            "fft_backend":fft_backend,
             "pupil_modes_or_ffts_cached":False,
         })
     #Autocorrelation of the pupil expressed in pupil
@@ -239,7 +240,8 @@ def modes2Otf(Cmm, modes, pupil, n_otf, samp=2, basis='Vii',
         if fft_mode=="batched":
             buf=accumulate_vii_batched(
                 M_all,ss,conj_pup,batch_size=fft_batch_size,
-                workers=fft_workers,diagnostics=fft_diagnostics,
+                workers=fft_workers,backend=fft_backend,
+                diagnostics=fft_diagnostics,
             )
         else:
             buf = np.zeros_like(G)
