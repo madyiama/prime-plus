@@ -166,6 +166,11 @@ def main():
     ap.add_argument("--focal-algorithm",choices=("legacy", "symmetry"),
                     default="legacy",
                     help="Experimental focal covariance accelerator; default unchanged")
+    ap.add_argument("--focal-cache-dir",type=Path,default=None,
+                    help="Disk cache ONLY for unfiltered symmetric focal SF; "
+                         "rotation-dependent pupil and OTF are never cached")
+    ap.add_argument("--profile-psfr",action="store_true",
+                    help="Optional PSF-R cProfile; timing overhead is expected")
     ap.add_argument("--export-ao-basis",action="store_true",
                     help="Export frozen AO phase SF + optical kernels and validate nominal parity")
     ap.add_argument("--check-only",action="store_true",
@@ -186,6 +191,8 @@ def main():
         "science_validation":"not_a_calibrated_Keck_2020_model",
         "method":"van_dam+legacy_psfr+unity+noll_angular",
         "focal_anisoplanatism_algorithm":args.focal_algorithm,
+        "focal_cache_configured":bool(args.focal_cache_dir is not None),
+        "cprofile_enabled":bool(args.profile_psfr),
         "cases":[],
     }
     failures=0
@@ -210,6 +217,11 @@ def main():
                 "--tt-axis-parity","native",
                 "--ho-covariance-policy","strict",
             ]
+            if args.focal_cache_dir is not None:
+                cmd.extend(("--focal-cache-dir",
+                            str(args.focal_cache_dir.resolve())))
+            if args.profile_psfr:
+                cmd.append("--profile-psfr")
             if args.export_ao_basis:
                 cmd.append("--export-ao-basis")
             if args.focal_algorithm != "legacy":
