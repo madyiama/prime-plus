@@ -1584,7 +1584,7 @@ def main():
         "observed_cutout_file": "observed_nirc2_cutout.npy",
         "observed_cutout_origin": "telemetryKeck.trs.cam.image",
         "focal_anisoplanatism_algorithm": args.focal_algorithm,
-        "focal_anisoplanatism_elapsed_s": float(model.freq.tani)/1000.0,
+        "frequency_anisoplanatism_elapsed_s": float(model.freq.tani)/1000.0,
         "psfr_total_init_elapsed_s": float(model.t_init)/1000.0,
         "ao_fit_basis_exported": bool(args.export_ao_basis),
         "ao_fit_basis_file": ("ao_fit_basis.npz" if args.export_ao_basis else None),
