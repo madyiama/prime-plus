@@ -26,6 +26,37 @@ import numpy as np
 SCHEMA = "p3.focal_unfiltered_sf.v1"
 VERSION = "flicker_exact_symmetry_2026_11_v1"
 PREFIX = "focal_symmetric"
+# Bounded, approximate on-disk LRU. Only this cache's own entries
+# can be evicted; no optical products or user files are touched.
+MAX_CACHE_ENTRIES = 64
+MAX_CACHE_BYTES = 256*1024*1024
+
+
+def _prune_cache(folder, *, protected):
+    """Evict oldest cached geometry entries, never a newly written entry."""
+    files=[]
+    for path in Path(folder).glob(PREFIX+"_*.npz"):
+        try:
+            st=path.stat()
+        except OSError:
+            continue
+        files.append((st.st_mtime,st.st_size,path))
+    files.sort(key=lambda row:(row[0],row[2].name))
+    size=sum(x[1] for x in files)
+    count=len(files)
+    for _, nbytes, path in files:
+        if count<=MAX_CACHE_ENTRIES and size<=MAX_CACHE_BYTES:
+            break
+        if path==protected:
+            continue
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            continue
+        count-=1
+        size-=nbytes
+
+
 
 
 def _scalar(value, label, *, allow_positive_inf=False):
@@ -119,6 +150,10 @@ def read_focal_cache(folder, key, shape, *, diagnostics=None):
                     raise ValueError("invalid cached SF")
                 result=np.array(a,dtype=np.float64,copy=True)
                 status="hit"
+            try:
+                target.touch()  # approximate disk LRU, not science metadata
+            except OSError:
+                pass
         except (OSError,ValueError,KeyError,TypeError,EOFError,BadZipFile):
             status="invalidated"
     if diagnostics is not None:
@@ -152,6 +187,13 @@ def write_focal_cache(folder, key, image, *, diagnostics=None):
         tmp=None
         if diagnostics is not None:
             diagnostics["cache_write_status"]="stored"
+        try:
+            _prune_cache(path,protected=target)
+        except OSError:
+            # Cache eviction is optional; a successful scientific result
+            # must never be discarded because pruning failed.
+            if diagnostics is not None:
+                diagnostics["cache_prune_status"]="failed_nonfatal"
     finally:
         if tmp is not None:
             tmp.unlink(missing_ok=True)
