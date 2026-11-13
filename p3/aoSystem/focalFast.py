@@ -57,6 +57,26 @@ def grouped_matrix_to_map(matrix, sep_x, sep_y):
     return out
 
 
+
+def _single_real_scalar(value, *, name):
+    """Accept a scalar or NumPy singleton; never silently select a beacon.
+
+    Keck's LGS height is often stored as a shape-(1,) NumPy array.
+    float(array) fails with NumPy >= 2 even though the physical value
+    is unambiguous. A multi-element array is not an admissible scalar
+    for this single-beacon focal covariance kernel.
+    """
+    try:
+        values = np.asarray(value, dtype=np.float64)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a real scalar") from exc
+    if values.size != 1:
+        raise ValueError(
+            f"{name} must contain exactly one value; got shape {values.shape}"
+        )
+    return float(values.reshape(-1)[0])
+
+
 def symmetric_focal_layer(
     pupil_axis_m, X1, Y1, rho_x, rho_y, sep_x, sep_y,
     *, cone_fraction, theta_shift_x_m, theta_shift_y_m,
@@ -73,10 +93,10 @@ def symmetric_focal_layer(
     if n<2 or any(np.shape(a)!=(n*n,n*n) for a in
                    (X1,Y1,rho_x,rho_y,sep_x,sep_y)):
         raise ValueError("Expected n_ph point-pair covariance geometry")
-    g=float(cone_fraction)
-    thx=float(theta_shift_x_m)
-    thy=float(theta_shift_y_m)
-    l0=float(finite_outer_scale_m)
+    g=_single_real_scalar(cone_fraction,name="cone_fraction")
+    thx=_single_real_scalar(theta_shift_x_m,name="theta_shift_x_m")
+    thy=_single_real_scalar(theta_shift_y_m,name="theta_shift_y_m")
+    l0=_single_real_scalar(finite_outer_scale_m,name="finite_outer_scale_m")
     if (not np.isfinite(g) or not np.isfinite(thx) or
             not np.isfinite(thy) or
             not (np.isfinite(l0) and l0>0 or np.isposinf(l0))):
