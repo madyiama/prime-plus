@@ -692,6 +692,8 @@ def main():
              "top cumulative functions (profiled wall time has overhead).",
     )
     args = parser.parse_args()
+    if args.focal_cache_dir is not None and args.focal_algorithm != "symmetry":
+        parser.error("--focal-cache-dir requires --focal-algorithm symmetry")
     if args.p3_pupil_parity != "native" and args.p3_pupil_resampling != "physical_binary":
         parser.error("--p3-pupil-parity flip_x/flip_y requires physical_binary")
     if args.r0_method != "zernike" and not args.p1_only:
