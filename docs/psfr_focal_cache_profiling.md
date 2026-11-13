@@ -39,8 +39,10 @@ version. Each .npz stores a version/schema, expected key, shape,
 finite array and SHA-256 of raw float64 bytes. Corrupt or stale
 files are disregarded and recomputed; writes are atomic. No pickle
 and no global cache state. Caller receives a private array copy.
-Different cache entries accumulate on disk; pruning by file age
-is manual and safe because the entries can always be recomputed.
+Only this geometric cache's own entries are retained, with a
+maximum of 64 entries or 256 MiB: the least recently used entries
+are evicted safely. The cache can always be regenerated and never
+deletes observation, pupil, OTF or other user result files.
 
 ## 1. Basic profiling without cProfile overhead
 
