@@ -1180,6 +1180,11 @@ def main():
           "nested anisoplanatism",float(model.freq.tani)/1000.,"s",
           "full init",float(model.t_init)/1000.,"s",flush=True)
 
+    # Save the HO-only SF diagnostic for numerical A/B validation.
+    # This is per observation and must NEVER be reused as a cached SF
+    # when the Keck pupil or telemetry changes.
+    np.save(args.output/"ho_dphi_ao.npy",np.asarray(model.dphi_ao,dtype=np.float64))
+
     # Telescope applies PupilResampling to the archived pupil at OTF build
     # time. Record its *effective* transmission, not just the input CLI flag.
     p3_model_pupil = getattr(model.ao.tel, "pupil_resampling_diagnostics", {})
