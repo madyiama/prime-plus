@@ -93,3 +93,54 @@ def test_2d_template_has_one_photon_channel():
     template=template_from_psfr(inp,pixel_scale_mas=12.)
     assert template.cube.shape==(8,8,1)
     np.testing.assert_array_equal(template.spectral_fractions,[1.])
+
+
+def test_v1_export_uses_existing_case_and_preserves_physics(tmp_path,monkeypatch):
+    from scripts import export_psfr_template as exporter
+    directory=tmp_path/"n0120"
+    directory.mkdir()
+    np.save(directory/"telemetry_only_psf.npy",synthetic())
+    metadata={
+        "psf_spectral_model":(
+            "Single reference-wavelength PSF shared across the three "
+            "science passband bins with different throughput weights"
+        ),
+        "psf_reference_wavelength_m":1.95e-6,
+        "camera_pixel_scale_mas":9.942,
+        "ao_mode":"LGS",
+        "code_revision":"synthetic-only",
+        "tt_kernel_convention":"noll_angular",
+    }
+    import json
+    (directory/"metadata.json").write_text(json.dumps(metadata))
+    called=[]
+    def fake_acceptance(path):
+        called.append(path)
+        return {"status":"passed_numerical_artifact_gates"}
+    monkeypatch.setattr(exporter,"validate_run",fake_acceptance)
+    output=exporter.export_keck_case(directory,pixel_scale_mas=9.942)
+    assert called==[directory]
+    result=load_psfr_template(output)
+    assert result.provenance["model"]=="Keck_LGS_NIRC2_V1"
+    assert result.provenance["absolute_strap_calibration"] is False
+    assert result.provenance["spectral_propagation"]==KECK_V1_SPECTRAL_STATUS
+    np.testing.assert_allclose(result.spectral_fractions,[.2,.3,.5])
+    assert output.with_suffix(".json").is_file()
+    with pytest.raises(ValueError,match="differs"):
+        exporter.export_keck_case(directory,pixel_scale_mas=12.0)
+
+
+def test_v1_export_refuses_unrecognized_spectral_forward(tmp_path,monkeypatch):
+    from scripts import export_psfr_template as exporter
+    import json
+    directory=tmp_path/"different"
+    directory.mkdir()
+    np.save(directory/"telemetry_only_psf.npy",synthetic())
+    (directory/"metadata.json").write_text(json.dumps({
+        "psf_spectral_model":"Independently propagated chromatic PSFs"
+    }))
+    monkeypatch.setattr(exporter,"validate_run",lambda path: {
+        "status":"passed_numerical_artifact_gates",
+    })
+    with pytest.raises(ValueError,match="Unexpected spectral"):
+        exporter.export_keck_case(directory,pixel_scale_mas=9.942)
