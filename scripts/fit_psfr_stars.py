@@ -51,6 +51,20 @@ def main():
     parser.add_argument("--core-radius",type=int,default=9,
                         help="PSF morphology radius in pixels")
     parser.add_argument("--max-detection-candidates",type=int,default=128)
+    parser.add_argument("--fwhm-min-ratio",type=float,default=.70,
+                        help="Minimum candidate/PSF half-max width ratio")
+    parser.add_argument("--fwhm-max-ratio",type=float,default=1.55,
+                        help="Maximum candidate/PSF half-max width ratio")
+    parser.add_argument("--min-shape-correlation",type=float,default=.78,
+                        help="Minimum local correlation with the PSF core")
+    parser.add_argument("--exclusion-fwhm",type=float,default=2.0,
+                        help="Exclude additional detections within this "
+                             "many PSF FWHM from an accepted star")
+    parser.add_argument("--min-relative-flux",type=float,default=.03,
+                        help="Minimum candidate flux / brightest accepted star")
+    parser.add_argument("--min-bic-improvement",type=float,default=12.,
+                        help="Minimum penalized model improvement, heuristic "
+                             "unless --sigma is calibrated")
     parser.add_argument("--background0",type=float,default=None)
     parser.add_argument("--radius",type=float,default=None,
                         help="Use only pixels within radius from initial positions")
@@ -115,13 +129,27 @@ def main():
             min_separation_px=args.min_separation,
             core_radius_px=args.core_radius,
             max_examined=args.max_detection_candidates,
+            fwhm_min_ratio=args.fwhm_min_ratio,
+            fwhm_max_ratio=args.fwhm_max_ratio,
+            min_shape_correlation=args.min_shape_correlation,
+            exclusion_fwhm=args.exclusion_fwhm,
+            min_relative_flux=args.min_relative_flux,
+            min_bic_improvement=args.min_bic_improvement,
         )
         starts=detected.positions_xy_px
         flux0=detected.initial_fluxes
         background0=detected.background
         fit_mask=detected.fit_valid_pixels
         catalog={
-            "method":"iterative PSF matched-filter, wing SNR, PSF-vs-single-pixel",
+            "method":"iterative PSF matched-filter + FWHM/shape, "
+                     "wing SNR, spike and penalized model alternatives",
+            "psf_fwhm_px":detected.psf_fwhm_px,
+            "psf_fwhm_range_px":detected.fwhm_acceptance_range_px,
+            "psf_fwhm_exclusion_radius_px":detected.exclusion_radius_px,
+            "min_shape_correlation":detected.min_shape_correlation,
+            "min_relative_flux":detected.min_relative_flux,
+            "min_bic_improvement":detected.min_bic_improvement,
+            "n_masked_compact_pixel_candidates":detected.n_masked_hot_pixel_candidates,
             "noise_source":detected.noise_source,
             "empirical_noise_sigma":detected.noise_sigma,
             "thresholds":{
@@ -129,7 +157,13 @@ def main():
                 "min_halo_snr":detected.min_halo_snr,
                 "max_sources":detected.max_sources,
                 "min_separation_px":args.min_separation,
-                "core_radius_px":args.core_radius,
+                "core_radius_px_minimum":args.core_radius,
+                "candidate_fwhm_ratio_min":args.fwhm_min_ratio,
+                "candidate_fwhm_ratio_max":args.fwhm_max_ratio,
+                "exclusion_fwhm":args.exclusion_fwhm,
+                "min_shape_correlation":args.min_shape_correlation,
+                "min_relative_flux":args.min_relative_flux,
+                "min_bic_improvement":args.min_bic_improvement,
             },
             "n_detected":len(detected.accepted),
             "n_rejected":len(detected.rejected),
@@ -161,13 +195,24 @@ def main():
             ax.scatter(starts[:,0],starts[:,1],s=90,facecolors="none",
                        edgecolors="lime",linewidths=1.8,
                        label=f"PSF-like ({len(starts)})")
+            # Show the measured core FWHM around accepted detections.
+            from matplotlib.patches import Circle
+            for x,y in starts:
+                ax.add_patch(Circle(
+                    (x,y),.5*detected.psf_fwhm_px,fill=False,
+                    edgecolor="lime",linewidth=1.3,linestyle="--",
+                ))
         if detected.rejected:
             bad=np.asarray([c.seed_xy_px for c in detected.rejected])
             ax.scatter(bad[:,0],bad[:,1],marker="x",c="red",
                        s=45,label=f"Rejected ({len(bad)})")
         if len(starts) or detected.rejected:
             ax.legend(loc="upper right")
-        ax.set(title="PSF-R source candidates (detector x/y)",
+        ax.set(title=(
+            "PSF-R candidates (FWHM="
+            f"{detected.psf_fwhm_px:.2f} px, "
+            f"exclusion={detected.exclusion_radius_px:.1f} px)"
+        ),
                xlabel="x column [px]",ylabel="y row [px]")
         fig.savefig(dest/"source_detection.png",dpi=160)
         plt.close(fig)
@@ -218,6 +263,9 @@ def main():
         ),
         "source_detection_rejected_pixels":(
             len(detected.rejected) if detected is not None else 0
+        ),
+        "psfr_prior_fwhm_px":(
+            detected.psf_fwhm_px if detected is not None else None
         ),
         "source_detection_catalog":(
             str(dest/"source_detection.json") if detected is not None else None
