@@ -29,25 +29,31 @@ def bench(*, nact, layers, notf, l0, trials, grid):
     products = {}
     for method in ("symmetry", "quadrant"):
         samples = []
-        peak = []
         for _ in range(trials):
-            tracemalloc.start()
+            # Absolute timings MUST exclude instrumentation overhead.
             start = perf_counter()
             val = focal_angular_function(
                 tel, atm, src, gs, nact, notf, 2.,
                 covariance_algorithm=method,
                 pupil_grid_mode=grid, output_grid="otf",
             )
-            elapsed = perf_counter()-start
-            _, top = tracemalloc.get_traced_memory()
+            samples.append(perf_counter()-start)
+        tracemalloc.start()
+        try:
+            memory_product = focal_angular_function(
+                tel, atm, src, gs, nact, notf, 2.,
+                covariance_algorithm=method,
+                pupil_grid_mode=grid, output_grid="otf",
+            )
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
             tracemalloc.stop()
-            samples.append(elapsed)
-            peak.append(top)
+        if not np.allclose(memory_product, val, rtol=1e-12, atol=2e-11):
+            raise ValueError("Instrumented and uninstrumented SF differ")
         profiles[method] = {
             "elapsed_s": samples,
             "median_elapsed_s": median(samples),
-            "tracemalloc_peaks_bytes": peak,
-            "median_tracemalloc_peak_bytes": median(peak),
+            "tracemalloc_peak_bytes_separate_run": peak,
         }
         products[method] = val
     ref, candidate = products["symmetry"], products["quadrant"]
