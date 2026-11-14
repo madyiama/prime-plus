@@ -6,6 +6,8 @@ radial/even, so I6 == I3.T; I4 and I5 have just n_ph**2 distinct
 arguments, not n_ph**4. I1 and I2 use the signed integer baseline grid.
 
 This changes ONLY evaluation order/rounding, not physical equations.
+See docs/psfr_perf_implementation_guide.md for implementation map,
+performance measurements, the PR stack and Keck acceptance limitations.
 Scientific production keeps its legacy path unless explicitly opted in
 and validated against full Keck NIRC2 PSF results.
 """

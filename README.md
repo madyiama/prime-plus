@@ -39,6 +39,15 @@ applied. This is **not** a validated absolute Keck STRAP calibration.
 
 [Functional architecture, scientific contracts and performance plan](docs/psfr_core_refactor.md).
 
+**Experimental performance implementation and measured Keck results:**
+[algorithm map, code paths, numerical acceptance, remaining scientific
+limits and PR dependency policy](docs/psfr_perf_implementation_guide.md).
+These opt-in methods are developed on `perf/psfr-focal-cache-profiling`
+(PR #42), which currently includes the unfinished fitting stack (#36–#39).
+They are **not part of the independent `refactor/psfr-core` branch or `main`**.
+The historical `legacy` HO/focal algorithms remain the defaults.
+
+
 ### Flux-normalized PSF product (new, representation only)
 
 ```python
