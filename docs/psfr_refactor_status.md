@@ -1,8 +1,8 @@
 # Consolidation PSF-R et fitting — 14 novembre 2026
 
 **Cible :** refactor/psfr-core (PR #30 vers main, encore draft).
-**PR d'intégration :** [#50](https://github.com/madyiama/prime-plus/pull/50).
-Le contenu ci-dessous décrit l'état cible après fusion de #50. Main reste inchangée.
+**PR d'intégration :** [#50](https://github.com/madyiama/prime-plus/pull/50), fusionnée dans cette branche (commit 75d235f8).
+Le contenu ci-dessous décrit l'état effectif de refactor/psfr-core ; main reste inchangée.
 
 ## PR et dépendances
 
@@ -14,16 +14,16 @@ Le contenu ci-dessous décrit l'état cible après fusion de #50. Main reste inc
 | #36 | Export de template PSF-R et provenance | Fusionnée |
 | #37 | Fitting stellaire, flux/positions/fond | Fusionnée |
 | #38 | Détection guidée par PSF et rejet des pics isolés | Fusionnée |
-| #39 | Fitting AO contraint sur base gelée | Code reporté par PR #50 (ancienne branche divergente) |
-| #40/#42 | Géométrie focale symétrique/cache | Code reporté par PR #50 |
+| #39 | Fitting AO contraint sur base gelée | Fermée, remplacée par PR #50 fusionnée |
+| #40/#42 | Géométrie focale symétrique/cache | PR42 fermée et remplacée par PR #50 fusionnée |
 | #44–#47 | HO Vii factorisé/FFT réelle, quadrant et 4 workers | Code reporté par PR #50 |
 | #41 | Débogage SIGKILL et tentative de réduction de mémoire Vii | Draft, non intégrée sans validation Linux réelle |
 | #43 | FFT HO en lots | Fermée sans fusion |
 | #48/#49 | Documentation technique et scientifique | Intégrée/actualisée dans PR #50 |
 
-Les anciennes PR #39 et #42 ne seront fermées comme remplacées
-qu'après réussite des tests et fusion de PR #50. Elles ne sont pas
-des PR historiquement fusionnées dans refactor/psfr-core.
+Les anciennes PR #39 et #42 ont été fermées comme remplacées
+après la fusion de PR #50. Elles n'ont pas été fusionnées historiquement,
+mais leur code a été consolidé via PR #50.
 
 ## Paramètres par défaut de PSF-R
 
