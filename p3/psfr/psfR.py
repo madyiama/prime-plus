@@ -75,8 +75,8 @@ class psfR:
                  ho_covariance_policy='strict',
                  tt_kernel_convention='noll_angular',
                  tt_axis_angle_deg=None, tt_axis_parity='native',
-                 focal_algorithm='legacy', focal_cache_dir=None,
-                 ho_vii_method='legacy', focal_workers=1):
+                 focal_algorithm='quadrant', focal_cache_dir=None,
+                 ho_vii_method='factorized_real', focal_workers=4):
         """
         Instantiating the psf-reconstruction model from a telemetry object
         """
