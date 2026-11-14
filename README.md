@@ -39,6 +39,15 @@ applied. This is **not** a validated absolute Keck STRAP calibration.
 
 [Functional architecture, scientific contracts and performance plan](docs/psfr_core_refactor.md).
 
+**Project status and performance closure (14 November 2026):**
+[refactor PR map, measured Keck timings, technical optimization summary and
+science acceptance gates](docs/psfr_refactor_status.md).
+Important: the latest fast HO/focal implementations (#42, #44–#47) live
+on the separate experimental stack; they are **not** yet in
+`refactor/psfr-core` or `main`. The optional timing/profiling instrumentation
+(#34) is integrated in this refactor branch. The fitting PR chain
+(#36–#39) is intentionally kept separate pending science validation.
+
 ### Flux-normalized PSF product (new, representation only)
 
 ```python
