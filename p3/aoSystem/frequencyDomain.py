@@ -127,8 +127,8 @@ class frequencyDomain():
 
     def __init__(self, aoSys, kcExt=None, nyquistSampling=False,
                  Hfilter=1, computeFocalAnisoCov=True, dtype=np.float64,
-                 focal_algorithm="legacy", focal_cache_dir=None,
-                 focal_workers=1):
+                 focal_algorithm="quadrant", focal_cache_dir=None,
+                 focal_workers=4):
 
         self.dtype = dtype
         if self.dtype == np.float32:
