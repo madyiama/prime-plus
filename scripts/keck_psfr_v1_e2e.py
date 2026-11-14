@@ -163,7 +163,7 @@ def main():
     ap.add_argument("--config",type=Path,default=DEFAULT_CONFIG)
     ap.add_argument("--output",type=Path,
                     default=Path("results/psfr_v1_acceptance"))
-    ap.add_argument("--focal-algorithm",choices=("legacy", "symmetry"),
+    ap.add_argument("--focal-algorithm",choices=("legacy", "symmetry", "quadrant"),
                     default="legacy",
                     help="Experimental focal covariance accelerator; default unchanged")
     ap.add_argument("--focal-cache-dir",type=Path,default=None,
@@ -179,8 +179,8 @@ def main():
     ap.add_argument("--check-only",action="store_true",
                     help="Check existing case outputs; do not run P3")
     args=ap.parse_args()
-    if args.focal_cache_dir is not None and args.focal_algorithm != "symmetry":
-        ap.error("--focal-cache-dir requires --focal-algorithm symmetry")
+    if args.focal_cache_dir is not None and args.focal_algorithm not in ("symmetry", "quadrant"):
+        ap.error("--focal-cache-dir requires --focal-algorithm symmetry or quadrant")
     if len(args.fits)!=len(args.sav):
         ap.error("Each FITS requires a matching SAV at the same argument index")
     if len({p.stem for p in args.fits})!=len(args.fits):

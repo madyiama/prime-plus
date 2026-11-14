@@ -84,7 +84,7 @@ def _array(value, label):
 
 def key_for_focal(
     tel, atm, src, gs, nActu, nOtf, samp,
-    *, pupil_grid_mode, output_grid,
+    *, pupil_grid_mode, output_grid, algorithm="symmetry",
 ):
     """Exact float64 cache fingerprint: never inspect the rotated pupil.
 
@@ -98,8 +98,10 @@ def key_for_focal(
     n=int(float(n_actu.reshape(-1)[0]))
     if n<1 or float(n)!=float(n_actu.reshape(-1)[0]):
         raise ValueError("Focal cache requires a positive integer actuator count")
+    if algorithm not in ("symmetry", "quadrant"):
+        raise ValueError("Unsupported focal geometry cache algorithm")
     params={
-        "schema":SCHEMA,"version":VERSION,"algorithm":"symmetry",
+        "schema":SCHEMA,"version":VERSION,"algorithm":algorithm,
         "telescope_diameter_m":_scalar(tel.D,"tel.D"),
         "n_actu":n,
         "n_otf":int(nOtf),
