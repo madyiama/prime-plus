@@ -15,10 +15,12 @@ from __future__ import annotations
 
 import argparse
 import json
+from dataclasses import asdict
 from pathlib import Path
 
 import numpy as np
 
+from p3.psfr.detection import detect_stellar_sources
 from p3.psfr.stellar import fit_stellar_scene
 from p3.psfr.template import load_psfr_template
 
@@ -36,6 +38,33 @@ def main():
                         help="Initial pixel centre; repeat for multiple stars")
     parser.add_argument("--flux0",type=float,nargs="+",default=None,
                         help="Initial fluxes, one per --xy")
+    parser.add_argument("--detect-only",action="store_true",
+                        help="Create detection catalog/figure without final fitting")
+    parser.add_argument("--max-sources",type=int,default=8,
+                        help="Hard upper limit on PSF-prior detections")
+    parser.add_argument("--detection-snr",type=float,default=6.,
+                        help="Minimum matched-PSF detection SNR")
+    parser.add_argument("--halo-snr",type=float,default=4.,
+                        help="Required off-centre PSF wing SNR (hot-pixel veto)")
+    parser.add_argument("--min-separation",type=float,default=4.,
+                        help="Minimum distance between accepted sources [pixels]")
+    parser.add_argument("--core-radius",type=int,default=9,
+                        help="PSF morphology radius in pixels")
+    parser.add_argument("--max-detection-candidates",type=int,default=128)
+    parser.add_argument("--fwhm-min-ratio",type=float,default=.70,
+                        help="Minimum candidate/PSF half-max width ratio")
+    parser.add_argument("--fwhm-max-ratio",type=float,default=1.55,
+                        help="Maximum candidate/PSF half-max width ratio")
+    parser.add_argument("--min-shape-correlation",type=float,default=.78,
+                        help="Minimum local correlation with the PSF core")
+    parser.add_argument("--exclusion-fwhm",type=float,default=2.0,
+                        help="Exclude additional detections within this "
+                             "many PSF FWHM from an accepted star")
+    parser.add_argument("--min-relative-flux",type=float,default=.03,
+                        help="Minimum candidate flux / brightest accepted star")
+    parser.add_argument("--min-bic-improvement",type=float,default=12.,
+                        help="Minimum penalized model improvement, heuristic "
+                             "unless --sigma is calibrated")
     parser.add_argument("--background0",type=float,default=None)
     parser.add_argument("--radius",type=float,default=None,
                         help="Use only pixels within radius from initial positions")
@@ -81,19 +110,136 @@ def main():
     if args.flux0 is not None and len(args.flux0)!=len(args.xy):
         parser.error("Provide one --flux0 value per --xy star")
 
+    dest=args.output or (case/"stellar_fit")
+    dest.mkdir(parents=True,exist_ok=True)
+
+    # Manual --xy deliberately overrides automatic source detection.
+    # Without --xy the detector counts candidates using the actual PSF-R,
+    # rejecting isolated single-pixel shapes before the stellar fit.
+    detected=None
+    starts=args.xy
+    flux0=args.flux0
+    background0=args.background0
+    fit_mask=mask
+    if args.xy is None:
+        detected=detect_stellar_sources(
+            observed,template,sigma=sigma,valid_mask=mask,
+            max_sources=args.max_sources,min_snr=args.detection_snr,
+            min_halo_snr=args.halo_snr,
+            min_separation_px=args.min_separation,
+            core_radius_px=args.core_radius,
+            max_examined=args.max_detection_candidates,
+            fwhm_min_ratio=args.fwhm_min_ratio,
+            fwhm_max_ratio=args.fwhm_max_ratio,
+            min_shape_correlation=args.min_shape_correlation,
+            exclusion_fwhm=args.exclusion_fwhm,
+            min_relative_flux=args.min_relative_flux,
+            min_bic_improvement=args.min_bic_improvement,
+        )
+        starts=detected.positions_xy_px
+        flux0=detected.initial_fluxes
+        background0=detected.background
+        fit_mask=detected.fit_valid_pixels
+        catalog={
+            "method":"iterative PSF matched-filter + FWHM/shape, "
+                     "wing SNR, spike and penalized model alternatives",
+            "psf_fwhm_px":detected.psf_fwhm_px,
+            "psf_fwhm_range_px":detected.fwhm_acceptance_range_px,
+            "psf_fwhm_exclusion_radius_px":detected.exclusion_radius_px,
+            "min_shape_correlation":detected.min_shape_correlation,
+            "min_relative_flux":detected.min_relative_flux,
+            "min_bic_improvement":detected.min_bic_improvement,
+            "n_masked_compact_pixel_candidates":detected.n_masked_hot_pixel_candidates,
+            "noise_source":detected.noise_source,
+            "empirical_noise_sigma":detected.noise_sigma,
+            "thresholds":{
+                "min_psf_snr":detected.min_snr,
+                "min_halo_snr":detected.min_halo_snr,
+                "max_sources":detected.max_sources,
+                "min_separation_px":args.min_separation,
+                "core_radius_px_minimum":args.core_radius,
+                "candidate_fwhm_ratio_min":args.fwhm_min_ratio,
+                "candidate_fwhm_ratio_max":args.fwhm_max_ratio,
+                "exclusion_fwhm":args.exclusion_fwhm,
+                "min_shape_correlation":args.min_shape_correlation,
+                "min_relative_flux":args.min_relative_flux,
+                "min_bic_improvement":args.min_bic_improvement,
+            },
+            "n_detected":len(detected.accepted),
+            "n_rejected":len(detected.rejected),
+            "accepted":[asdict(c) for c in detected.accepted],
+            "rejected":[asdict(c) for c in detected.rejected],
+            "final_refined_xy_px":starts.tolist(),
+            "initial_fluxes_for_fit":flux0.tolist(),
+            "n_initially_valid_pixels":detected.input_valid_pixels,
+            "n_valid_after_candidate_rejection":detected.final_detection_valid_pixels,
+            "examined_candidates":detected.examined_candidates,
+            "stopped_reason":detected.stopped_reason,
+            "labels_are_morphological_not_verified_detector_truth":True,
+            "AO_parameters_fitted":False,
+        }
+        (dest/"source_detection.json").write_text(
+            json.dumps(catalog,indent=2,allow_nan=False),encoding="utf-8"
+        )
+        np.save(dest/"source_detection_valid_pixels.npy",fit_mask)
+
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        fig,ax=plt.subplots(figsize=(7,6),constrained_layout=True)
+        good=observed[np.isfinite(observed)]
+        scale=float(np.percentile(np.abs(good),99)) if good.size else 1.
+        ax.imshow(np.arcsinh(np.where(np.isfinite(observed),observed,0)/
+                            max(scale,1e-12)),origin="lower",cmap="viridis")
+        if len(starts):
+            ax.scatter(starts[:,0],starts[:,1],s=90,facecolors="none",
+                       edgecolors="lime",linewidths=1.8,
+                       label=f"PSF-like ({len(starts)})")
+            # Show the measured core FWHM around accepted detections.
+            from matplotlib.patches import Circle
+            for x,y in starts:
+                ax.add_patch(Circle(
+                    (x,y),.5*detected.psf_fwhm_px,fill=False,
+                    edgecolor="lime",linewidth=1.3,linestyle="--",
+                ))
+        if detected.rejected:
+            bad=np.asarray([c.seed_xy_px for c in detected.rejected])
+            ax.scatter(bad[:,0],bad[:,1],marker="x",c="red",
+                       s=45,label=f"Rejected ({len(bad)})")
+        if len(starts) or detected.rejected:
+            ax.legend(loc="upper right")
+        ax.set(title=(
+            "PSF-R candidates (FWHM="
+            f"{detected.psf_fwhm_px:.2f} px, "
+            f"exclusion={detected.exclusion_radius_px:.1f} px)"
+        ),
+               xlabel="x column [px]",ylabel="y row [px]")
+        fig.savefig(dest/"source_detection.png",dpi=160)
+        plt.close(fig)
+        print("[PSF-R detection]",len(starts),"source(s),",
+              len(detected.rejected),"rejected candidates,",
+              "stop =",detected.stopped_reason,flush=True)
+        if args.detect_only:
+            print("Detection catalog:",dest/"source_detection.json")
+            return 0
+        if len(starts)==0:
+            print("No PSF-like stellar source found; inspect source_detection.png "
+                  "and adjust --detection-snr/--halo-snr or supply --xy.")
+            return 2
+    elif args.detect_only:
+        parser.error("--detect-only requires automatic detection (omit --xy)")
+
     fit=fit_stellar_scene(
         observed,template,
-        initial_positions_xy_px=args.xy,
-        initial_fluxes=args.flux0,
-        initial_background=args.background0,
-        sigma=sigma,valid_mask=mask,
+        initial_positions_xy_px=starts,
+        initial_fluxes=flux0,
+        initial_background=background0,
+        sigma=sigma,valid_mask=fit_mask,
         radius_px=args.radius,
         max_position_offset_px=args.max_offset,
         robust_loss=args.loss,f_scale=args.f_scale,
         max_nfev=args.max_nfev,
     )
-    dest=args.output or (case/"stellar_fit")
-    dest.mkdir(parents=True,exist_ok=True)
     np.save(dest/"model.npy",fit.model)
     np.save(dest/"residual.npy",fit.residual)
     np.save(dest/"valid_pixels.npy",fit.valid_pixels)
@@ -111,6 +257,19 @@ def main():
         "template":str(tpath.resolve()),
         "template_source":template.provenance,
         "n_stars":int(len(fit.fluxes)),
+        "source_detection_method":(
+            "psf_prior_morphological" if detected is not None else
+            "manual_initial_coordinates"
+        ),
+        "source_detection_rejected_pixels":(
+            len(detected.rejected) if detected is not None else 0
+        ),
+        "psfr_prior_fwhm_px":(
+            detected.psf_fwhm_px if detected is not None else None
+        ),
+        "source_detection_catalog":(
+            str(dest/"source_detection.json") if detected is not None else None
+        ),
         "stars":[{
             "index":int(i),
             "flux_detector_counts_on_unshifted_template_support":float(flux),
