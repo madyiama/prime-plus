@@ -12,8 +12,12 @@ is changed.
   every observation; do not cache them.
 - Unmodified covariance PSD rejection, eigenvalues/eigenvectors,
   pupil sampling, modal weights, FITS/SAV and wavelength physics.
-- Scientific acceptance: rtol=atol=1e-12 on BOTH the 2D HO phase SF
-  and the entire 128x128x3 science PSF from real Keck telemetry.
+- Scientific integration gate, approved after n0120 A/B: full
+  128x128x3 science PSF must pass rtol=atol=1e-12. Intermediate HO
+  phase SF remains strictly compared to 1e-12 and its result is
+  preserved as a separate warning, not silently dropped or relaxed.
+  Optical/stellar metric comparisons on additional acquisitions
+  are still desirable before adopting factorized as DEFAULT.
 - Mathematical identities can change floating-point rounding. All
   experiments are opt-in; the original scientific path stays default.
 
@@ -79,8 +83,11 @@ either run, for unbiased benchmarking.
 
 Output: results/compare_keck_vii_factorized.json.
 The comparator rejects changed FITS/SAV, pupil orientation,
-geometric cache status or cProfile usage. Both the HO phase SF
-and science PSF must pass strict per-pixel equivalence before merge.
+geometric cache status or cProfile usage. It reports strict per-pixel
+parity of BOTH HO SF and science PSF, but exits nonzero only for
+final PSF failure. Intermediate HO differences are retained as a
+distinct numerical warning. The science PSF is the integration gate
+for this opt-in feature following the user's explicit acceptance.
 No change to the user-facing default HO Vii algorithm.
 
 ## 2. Investigation of 4D OTF/PSF for loops
@@ -116,11 +123,15 @@ at ~0.120 s, whereas HO phase SF took ~11.25 s; focus on HO first.
 
 ## 3. Decision process
 
-- Reject candidate on any 1e-12 HO SF or science PSF mismatch,
-  even when the final image alone is nearly identical.
-- If passing, require reproducible speedup at single-thread and
-  realistic peak RAM, on at least two pupil orientations.
-- If factorization fails strict numerics, retain the research report,
-  keep legacy production behavior and examine per-mode FFT buffer
-  reuse and memory layout without reordering FFTs or sums.
-- No automatic promotion or merging to stable refactor branches.
+- Reject candidate if final science PSF exceeds 1e-12 tolerance.
+- Always retain the strict HO SF parity result and warn if it fails;
+  never mask numerical differences or alter the displayed tolerance.
+- On n0120 the final science PSF passed (max error 4.34e-19);
+  internal HO SF failed 1e-12 by 1.38e-11 maximum, with L2
+  relative error ~9.06e-13. The opt-in path was approved because
+  the final science product is unchanged to machine precision.
+- This acceptance is for opt-in merging, NOT for selecting a new
+  default on all Keck regimes. Additional pupil rotations, Strehl,
+  FWHM and deterministic stellar fitting should be checked.
+- Keep 4D vectorization audit separate; its measured sub-millisecond
+  speedup is not evidence of full Keck PSF-R acceleration.
