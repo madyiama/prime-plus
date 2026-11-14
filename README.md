@@ -39,14 +39,22 @@ applied. This is **not** a validated absolute Keck STRAP calibration.
 
 [Functional architecture, scientific contracts and performance plan](docs/psfr_core_refactor.md).
 
-**Project status and performance closure (14 November 2026):**
-[refactor PR map, measured Keck timings, technical optimization summary and
-science acceptance gates](docs/psfr_refactor_status.md).
-Important: the latest fast HO/focal implementations (#42, #44–#47) live
-on the separate experimental stack; they are **not** yet in
-`refactor/psfr-core` or `main`. The optional timing/profiling instrumentation
-(#34) is integrated in this refactor branch. The fitting PR chain
-(#36–#39) is intentionally kept separate pending science validation.
+**Consolidated PSF-R / Keck PSF Lab integration:**
+[optimized scientific reconstruction, fitting interfaces, benchmark provenance,
+legacy-reference commands and deployment guidance](docs/psfr_keck_lab_integration.md).
+For the refactor and stacked PR history, see
+[docs/psfr_refactor_status.md](docs/psfr_refactor_status.md). Algorithm
+and physical-contract details are in
+[docs/psfr_perf_implementation_guide.md](docs/psfr_perf_implementation_guide.md).
+
+On this refactor release candidate, Keck telemetry-only PSF-R uses the
+**exact Flicker quadrant (4 CPU workers)** and **factorized real FFT Vii**
+by default. `legacy` modes remain available for strict parity studies:
+`--focal-algorithm legacy --ho-vii-method legacy`. No disk cache, fitting,
+PSD relaxation, artificial instrument TT gain or GPU is enabled implicitly.
+Stellar and constrained AO fitting are separate explicitly invoked commands.
+These defaults are **numerical optimizations**, not independently calibrated
+Keck instrument physics.
 
 ### Flux-normalized PSF product (new, representation only)
 
