@@ -687,6 +687,11 @@ def main():
              "on symmetry path; never cache rotated pupil, OTF, HO or TT.",
     )
     parser.add_argument(
+        "--ho-vii-method",choices=("legacy","factorized"),default="legacy",
+        help="Experimental Vii factorization (one squared-mode FFT instead "
+             "of one per mode); requires strict real Keck HO-SF and PSF parity.",
+    )
+    parser.add_argument(
         "--profile-psfr",action="store_true",
         help="Opt-in cProfile of psfR initialization; saves .pstats and "
              "top cumulative functions (profiled wall time has overhead).",
@@ -1099,6 +1104,7 @@ def main():
             tt_axis_parity=args.tt_axis_parity,
             focal_algorithm=args.focal_algorithm,
             focal_cache_dir=args.focal_cache_dir,
+            ho_vii_method=args.ho_vii_method,
         )
 
     if args.profile_psfr:
@@ -1129,6 +1135,7 @@ def main():
             "anisoplanatism":float(model.freq.tani),
         },
         "focal_geometric_kernel":model.freq.focal_diagnostics,
+        "ho_vii_kernel":model.ho_vii_diagnostics,
         "fourier_model_internal_ms":{
             k:float(getattr(model.fao,k))
             for k in (
@@ -1155,6 +1162,11 @@ def main():
           model.freq.focal_diagnostics.get("cache_status","unavailable"),
           "nested anisoplanatism",float(model.freq.tani)/1000.,"s",
           "full init",float(model.t_init)/1000.,"s",flush=True)
+
+    # Scientific parity verification output: never cache this across Keck
+    # exposures; the phase SF depends on the CURRENT rotated pupil and HO.
+    np.save(args.output/"ho_dphi_ao.npy",
+            np.asarray(model.dphi_ao,dtype=np.float64))
 
     # Telescope applies PupilResampling to the archived pupil at OTF build
     # time. Record its *effective* transmission, not just the input CLI flag.
@@ -1688,6 +1700,8 @@ def main():
             model.tt_kernel_dphi_multiplier_vs_noll
         ),
         "ho_covariance_policy": args.ho_covariance_policy,
+        "ho_vii_method": args.ho_vii_method,
+        "ho_vii_diagnostics": model.ho_vii_diagnostics,
         "ho_covariance_projection_applied": bool(
             getattr(model, "ho_covariance_diagnostics", {}).get(
                 "projection_applied", False
