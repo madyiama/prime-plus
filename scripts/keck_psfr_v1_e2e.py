@@ -169,9 +169,9 @@ def main():
     ap.add_argument("--focal-cache-dir",type=Path,default=None,
                     help="Disk cache ONLY for unfiltered symmetric focal SF; "
                          "rotation-dependent pupil and OTF are never cached")
-    ap.add_argument("--ho-vii-method",choices=("legacy","factorized"),
+    ap.add_argument("--ho-vii-method",choices=("legacy","factorized","factorized_real"),
                     default="legacy",
-                    help="Experimental Vii algebraic FFT factorization")
+                    help="Opt-in Vii full-FFT or one-sided real-FFT factorization")
     ap.add_argument("--profile-psfr",action="store_true",
                     help="Optional PSF-R cProfile; timing overhead is expected")
     ap.add_argument("--export-ao-basis",action="store_true",
