@@ -169,6 +169,9 @@ def main():
     ap.add_argument("--focal-cache-dir",type=Path,default=None,
                     help="Disk cache ONLY for unfiltered symmetric focal SF; "
                          "rotation-dependent pupil and OTF are never cached")
+    ap.add_argument("--ho-vii-method",choices=("legacy","factorized"),
+                    default="legacy",
+                    help="Experimental Vii algebraic FFT factorization")
     ap.add_argument("--profile-psfr",action="store_true",
                     help="Optional PSF-R cProfile; timing overhead is expected")
     ap.add_argument("--export-ao-basis",action="store_true",
@@ -195,6 +198,7 @@ def main():
         "focal_anisoplanatism_algorithm":args.focal_algorithm,
         "focal_cache_configured":bool(args.focal_cache_dir is not None),
         "cprofile_enabled":bool(args.profile_psfr),
+        "ho_vii_method":args.ho_vii_method,
         "cases":[],
     }
     failures=0
@@ -224,6 +228,8 @@ def main():
                             str(args.focal_cache_dir.resolve())))
             if args.profile_psfr:
                 cmd.append("--profile-psfr")
+            if args.ho_vii_method!="legacy":
+                cmd.extend(("--ho-vii-method",args.ho_vii_method))
             if args.export_ao_basis:
                 cmd.append("--export-ao-basis")
             if args.focal_algorithm != "legacy":
