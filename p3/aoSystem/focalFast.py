@@ -6,6 +6,8 @@ radial/even, so I6 == I3.T; I4 and I5 have just n_ph**2 distinct
 arguments, not n_ph**4. I1 and I2 use the signed integer baseline grid.
 
 This changes ONLY evaluation order/rounding, not physical equations.
+See docs/psfr_perf_implementation_guide.md for implementation map,
+performance measurements, the PR stack and Keck acceptance limitations.
 Scientific production keeps its legacy path unless explicitly opted in
 and validated against full Keck NIRC2 PSF results.
 """
@@ -14,6 +16,46 @@ from __future__ import annotations
 import numpy as np
 
 from p3.aoSystem import FourierUtils
+
+
+
+def parallel_ialpha(x, y, *, executor=None, workers=1,
+                    min_chunk_elements=4096, diagnostics=None):
+    """Evaluate the *unchanged* SciPy Ialpha kernel in deterministic row chunks.
+
+    Only the independent elementwise radial McDonald evaluations are
+    parallelized; all subsequent 6-term arithmetic and bincount reductions
+    remain single-threaded and preserve the original order. Input arrays are
+    broadcast as zero-copy views, not materialized pair-cubes. Each worker
+    writes to a private result and the caller assembles rows in order.
+
+    The executor is owned by the caller and reused for all focal layers.
+    No interpolation, approximations or float32. Small arrays remain serial
+    to avoid overhead; L0=infinity never calls this function.
+    """
+    if type(workers) is not int or workers not in (1, 2, 4):
+        raise ValueError("Ialpha workers must be exactly 1, 2 or 4")
+    a, b = np.broadcast_arrays(np.asarray(x, dtype=np.float64),
+                               np.asarray(y, dtype=np.float64))
+    if (executor is None or workers == 1 or a.ndim != 2 or
+            a.size < workers*min_chunk_elements or a.shape[0] < workers):
+        if diagnostics is not None:
+            diagnostics["ialpha_serial_calls"] = diagnostics.get(
+                "ialpha_serial_calls", 0) + 1
+        return FourierUtils.Ialpha(a, b)
+    if diagnostics is not None:
+        diagnostics["ialpha_parallel_calls"] = diagnostics.get(
+            "ialpha_parallel_calls", 0) + 1
+    edges = np.linspace(0, a.shape[0], workers+1, dtype=np.intp)
+    tasks = [
+        executor.submit(FourierUtils.Ialpha, a[edges[i]:edges[i+1]],
+                        b[edges[i]:edges[i+1]])
+        for i in range(workers)
+    ]
+    out = np.empty(a.shape, dtype=np.float64)
+    for i, task in enumerate(tasks):
+        out[edges[i]:edges[i+1]] = task.result()
+    return out
 
 
 def grouped_matrix_to_map(matrix, sep_x, sep_y):
@@ -145,3 +187,103 @@ def symmetric_focal_layer(
     I6=I3.T
     a,b,c,d,e,f=coeffs
     return constant+a*I1+b*I2+c*I3+d*I4+e*I5+f*I6
+
+
+def direct_focal_quadrant_map(
+    pupil_axis_m, *, cone_fraction, theta_shift_x_m, theta_shift_y_m,
+    finite_outer_scale_m, workers=1, executor=None, diagnostics=None,
+):
+    """Flicker six-term covariance, directly averaged over the legacy quadrant.
+
+    For vector_to_separation's exact indexing, a pair (i,j) belongs to
+    the negative-lag quadrant iff ix >= jx AND iy <= jy, where flattened
+    pupil indices are i=ix*n+iy and j=jx*n+jy. Only these ordered pairs
+    are evaluated. This does NOT change the signs, pupil grid, radial
+    McDonald kernel, outer-scale limit or final reflected map.
+
+    No full (n*n, n*n) pupil-pair matrix is allocated. This helper is valid
+    only for the scalar/identity Hfilter path; the caller must fall back
+    to the original full matrix before a non-scalar spatial filter.
+    """
+    if type(workers) is not int or workers not in (1, 2, 4):
+        raise ValueError("Ialpha workers must be exactly 1, 2 or 4")
+    u = np.asarray(pupil_axis_m, dtype=np.float64)
+    n = u.size
+    if u.ndim != 1 or n < 2 or not np.isfinite(u).all():
+        raise ValueError("Expected a finite one-dimensional pupil axis")
+    step = u[1] - u[0]
+    if (not np.isfinite(step) or step <= 0 or
+            not np.allclose(np.diff(u), step, rtol=1e-12, atol=1e-14)):
+        raise ValueError("Quadrant evaluation requires a uniform pupil grid")
+    g = _single_real_scalar(cone_fraction, name="cone_fraction")
+    thx = _single_real_scalar(theta_shift_x_m, name="theta_shift_x_m")
+    thy = _single_real_scalar(theta_shift_y_m, name="theta_shift_y_m")
+    l0 = _single_real_scalar(finite_outer_scale_m,
+                              name="finite_outer_scale_m")
+    if (not np.isfinite(g) or not np.isfinite(thx) or
+            not np.isfinite(thy) or not (
+                np.isfinite(l0) and l0 > 0 or np.isposinf(l0))):
+        raise ValueError("Invalid cone and outer-scale parameters")
+    if workers > 1 and executor is None and not np.isposinf(l0):
+        raise ValueError("Parallel Ialpha requires a managed thread executor")
+
+    if np.isposinf(l0):
+        def covariance(x, y):
+            return np.hypot(x, y)**(5.0/3.0)
+    else:
+        f0 = 2*np.pi/l0
+        def covariance(x, y):
+            return parallel_ialpha(f0*x, f0*y, executor=executor,
+                                   workers=workers, diagnostics=diagnostics)
+
+    # Exactly the legacy negative-lag selection. Its two axes run in
+    # opposite index directions because of vector_to_separation's
+    # historical X/Y flattening conventions: rho_x=u[jx]-u[ix],
+    # rho_y=u[iy]-u[jy].
+    ix, jx = np.tril_indices(n)
+    iy, jy = np.triu_indices(n)
+    rho_x = (u[jx]-u[ix])[:, None]
+    rho_y = (u[iy]-u[jy])[None, :]
+    ui_x, uj_x = u[ix][:, None], u[jx][:, None]
+    ui_y, uj_y = u[iy][None, :], u[jy][None, :]
+
+    # I3(i,j), I4(i,j), I5(i,j), I6(i,j)=I3(j,i).
+    # I4 and I5 need n*n distinct Bessel evaluations, not n**4.
+    i4_small = covariance(g*u[None, :]-thx, g*u[:, None]-thy)
+    i5_small = covariance(-g*u[:, None]-thx, -g*u[None, :]-thy)
+    pair = covariance(rho_x-g*uj_x+thx, rho_y-g*ui_y+thy)
+    i4 = i4_small[iy[None, :], jx[:, None]]
+    i5 = i5_small[ix[:, None], jy[None, :]]
+    i6 = covariance(-rho_x-g*ui_x+thx, -rho_y-g*uj_y+thy)
+    if np.isposinf(l0):
+        # Kolmogorov: I1+I2-I3+I4+I5-I6.
+        pair = -pair+i4+i5-i6
+    else:
+        # Finite von Karman: 6/5-I1-I2+I3-I4-I5+I6.
+        pair = pair-i4-i5+i6
+
+    # A scalar baseline term may be averaged AFTER pair aggregation;
+    # its value is identical for all pairs in a given baseline bin.
+    # np.bincount is the same operation used by grouped_matrix_to_map.
+    lag_bin = (((iy-jy)[None, :]+n-1)*n
+               + ((jx-ix)[:, None]+n-1))
+    totals = np.bincount(lag_bin.ravel(), weights=pair.ravel(),
+                         minlength=n*n)
+    counts = np.bincount(lag_bin.ravel(), minlength=n*n)
+    if np.any(counts == 0):
+        raise ValueError("Incomplete focal quadrant baseline grid")
+    quadrant = (totals/counts).reshape(n, n)
+    lag = np.arange(1-n, 1)*step
+    lag_x, lag_y = np.meshgrid(lag, lag)
+    i1 = covariance(lag_x, lag_y)
+    i2 = covariance((1-g)*lag_x, (1-g)*lag_y)
+    if np.isposinf(l0):
+        quadrant += i1+i2
+    else:
+        quadrant += 6.0/5.0-i1-i2
+
+    out = np.empty((2*n-1, 2*n-1), dtype=np.float64)
+    out[:n, :n] = quadrant
+    out[:n, n:] = np.fliplr(quadrant[:, :-1])
+    out[n:, :] = np.flipud(out[:n-1, :])
+    return out

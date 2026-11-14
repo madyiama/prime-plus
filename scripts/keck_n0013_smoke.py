@@ -677,11 +677,35 @@ def main():
              "fitting; require strict nominal Keck PSF parity.",
     )
     parser.add_argument(
-        "--focal-algorithm",choices=("legacy", "symmetry"),default="legacy",
+        "--focal-workers",type=int,choices=(1,2,4),default=1,
+        help="Exact CPU Ialpha workers for quadrant focal only (default 1)",
+    )
+    parser.add_argument(
+        "--focal-algorithm",choices=("legacy", "symmetry", "quadrant"),default="legacy",
         help="Focal anisoplanatism covariance evaluation: historical (default) "
-             "or opt-in six-term algebraic symmetry (requires Keck parity check)",
+             "or opt-in symmetry/quadrant acceleration (requires Keck parity check)",
+    )
+    parser.add_argument(
+        "--focal-cache-dir",type=Path,default=None,
+        help="Optional disk cache ONLY for the unfiltered geometric focal SF "
+             "on symmetry path; never cache rotated pupil, OTF, HO or TT.",
+    )
+    parser.add_argument(
+        "--ho-vii-method",choices=("legacy","factorized","factorized_real"),default="legacy",
+        help="Vii estimator: historical, algebraic complex-FFT factorization, "
+             "or experimental one-sided real-FFT factorization; "
+             "requires Keck science-PSF parity and HO diagnostics.",
+    )
+    parser.add_argument(
+        "--profile-psfr",action="store_true",
+        help="Opt-in cProfile of psfR initialization; saves .pstats and "
+             "top cumulative functions (profiled wall time has overhead).",
     )
     args = parser.parse_args()
+    if args.focal_workers != 1 and args.focal_algorithm != "quadrant":
+        parser.error("--focal-workers > 1 requires --focal-algorithm quadrant")
+    if args.focal_cache_dir is not None and args.focal_algorithm not in ("symmetry", "quadrant"):
+        parser.error("--focal-cache-dir requires --focal-algorithm symmetry or quadrant")
     if args.p3_pupil_parity != "native" and args.p3_pupil_resampling != "physical_binary":
         parser.error("--p3-pupil-parity flip_x/flip_y requires physical_binary")
     if args.r0_method != "zernike" and not args.p1_only:
@@ -1075,17 +1099,82 @@ def main():
     if args.disable_tt_jitter:
         print("[TT jitter OTF] DISABLED for ablation (not a physical model)",
               flush=True)
-    model = stage("psfR", lambda: psfR(
-        sd.trs, compute_dphi_jitter=not args.disable_tt_jitter,
-        tt_covariance_mode=tt_jitter_model,
-        tt_mirror_model=tt_mirror_model,
-        tt_welch_nperseg=tt_jitter_nperseg,
-        ho_covariance_policy=args.ho_covariance_policy,
-        tt_kernel_convention=args.tt_kernel_convention,
-        tt_axis_angle_deg=args.tt_axis_angle_deg,
-        tt_axis_parity=args.tt_axis_parity,
-        focal_algorithm=args.focal_algorithm,
-    ))
+    def _construct_psfr():
+        return psfR(
+            sd.trs, compute_dphi_jitter=not args.disable_tt_jitter,
+            tt_covariance_mode=tt_jitter_model,
+            tt_mirror_model=tt_mirror_model,
+            tt_welch_nperseg=tt_jitter_nperseg,
+            ho_covariance_policy=args.ho_covariance_policy,
+            tt_kernel_convention=args.tt_kernel_convention,
+            tt_axis_angle_deg=args.tt_axis_angle_deg,
+            tt_axis_parity=args.tt_axis_parity,
+            focal_algorithm=args.focal_algorithm,
+            focal_cache_dir=args.focal_cache_dir,
+            focal_workers=args.focal_workers,
+            ho_vii_method=args.ho_vii_method,
+        )
+
+    if args.profile_psfr:
+        import cProfile
+        import pstats
+        profiler=cProfile.Profile()
+        try:
+            model=stage("psfR",lambda: profiler.runcall(_construct_psfr))
+        finally:
+            profiler.dump_stats(str(args.output/"psfr_init.pstats"))
+            with (args.output/"psfr_init_profile_top.txt").open(
+                "w",encoding="utf-8"
+            ) as stream:
+                pstats.Stats(profiler,stream=stream).strip_dirs().sort_stats(
+                    "cumulative"
+                ).print_stats(60)
+            print("[PSF-R profiling] saved .pstats and top cumulative times",
+                  flush=True)
+    else:
+        model=stage("psfR",_construct_psfr)
+
+    profile_report={
+        "units":"milliseconds",
+        "psfr_stage_timings_ms":model.timing_breakdown_ms,
+        "frequency_domain_nested_ms":{
+            "frequency_grid":float(model.freq.tfreq),
+            "static_otf_setup":float(model.freq.totf),
+            "anisoplanatism":float(model.freq.tani),
+        },
+        "focal_geometric_kernel":model.freq.focal_diagnostics,
+        "ho_vii_kernel":model.ho_vii_diagnostics,
+        "fourier_model_internal_ms":{
+            k:float(getattr(model.fao,k))
+            for k in (
+                "t_init","t_initFreq","t_atmo","t_powerSpectrumDensity",
+                "t_reconstructor","t_finalReconstructor","t_tomo",
+                "t_opt","t_controller","t_aliasingPSD",
+                "t_spatioTemporalPSD","t_noisePSD","t_errorBreakDown",
+            )
+            if hasattr(model.fao,k)
+            and np.isscalar(getattr(model.fao,k))
+            and np.isfinite(getattr(model.fao,k))
+        },
+        "nested_times_are_not_additive":True,
+        "cprofile_enabled":bool(args.profile_psfr),
+        "cprofile_overhead_disallows_direct_wall_time_speedup_claim":bool(
+            args.profile_psfr
+        ),
+        "rotated_pupil_or_derived_otf_cached":False,
+    }
+    (args.output/"psfr_profile_breakdown.json").write_text(
+        json.dumps(profile_report,indent=2,allow_nan=False),encoding="utf-8"
+    )
+    print("[PSF-R profile] focal cache",
+          model.freq.focal_diagnostics.get("cache_status","unavailable"),
+          "nested anisoplanatism",float(model.freq.tani)/1000.,"s",
+          "full init",float(model.t_init)/1000.,"s",flush=True)
+
+    # Scientific parity verification output: never cache this across Keck
+    # exposures; the phase SF depends on the CURRENT rotated pupil and HO.
+    np.save(args.output/"ho_dphi_ao.npy",
+            np.asarray(model.dphi_ao,dtype=np.float64))
 
     # Telescope applies PupilResampling to the archived pupil at OTF build
     # time. Record its *effective* transmission, not just the input CLI flag.
@@ -1584,6 +1673,11 @@ def main():
         "observed_cutout_file": "observed_nirc2_cutout.npy",
         "observed_cutout_origin": "telemetryKeck.trs.cam.image",
         "focal_anisoplanatism_algorithm": args.focal_algorithm,
+        "focal_workers": args.focal_workers,
+        "focal_geometric_cache": model.freq.focal_diagnostics,
+        "focal_cache_configured": bool(args.focal_cache_dir is not None),
+        "psfr_profile_report_file": "psfr_profile_breakdown.json",
+        "cprofile_enabled": bool(args.profile_psfr),
         "frequency_anisoplanatism_elapsed_s": float(model.freq.tani)/1000.0,
         "psfr_total_init_elapsed_s": float(model.t_init)/1000.0,
         "ao_fit_basis_exported": bool(args.export_ao_basis),
@@ -1615,6 +1709,8 @@ def main():
             model.tt_kernel_dphi_multiplier_vs_noll
         ),
         "ho_covariance_policy": args.ho_covariance_policy,
+        "ho_vii_method": args.ho_vii_method,
+        "ho_vii_diagnostics": model.ho_vii_diagnostics,
         "ho_covariance_projection_applied": bool(
             getattr(model, "ho_covariance_diagnostics", {}).get(
                 "projection_applied", False

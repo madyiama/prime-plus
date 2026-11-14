@@ -75,13 +75,15 @@ class psfR:
                  ho_covariance_policy='strict',
                  tt_kernel_convention='noll_angular',
                  tt_axis_angle_deg=None, tt_axis_parity='native',
-                 focal_algorithm='legacy'):
+                 focal_algorithm='legacy', focal_cache_dir=None,
+                 ho_vii_method='legacy', focal_workers=1):
         """
         Instantiating the psf-reconstruction model from a telemetry object
         """
 
         # INSTANTIATING THE MODEL OF THE AOSYSTEM
         tstart = time.time()
+        _start_ao_perf = time.perf_counter()
 
         if not hasattr(trs,'path_ini'):
             raise ValueError("no .ini file attached with the telemetry object")
@@ -127,6 +129,10 @@ class psfR:
             )
         self.ho_covariance_policy = ho_covariance_policy
         self.ho_covariance_diagnostics = {}
+        if ho_vii_method not in ('legacy','factorized','factorized_real'):
+            raise ValueError("Unknown HO Vii method")
+        self.ho_vii_method = ho_vii_method
+        self.ho_vii_diagnostics = {}
         self.ao = aoSystem(self.path_ini, path_root=path_root)
 
         # defining the number of model parameters
@@ -144,48 +150,72 @@ class psfR:
         if self.ao.tel.path_static_on and hasattr(trs.tel,'map_ncpa')and np.any(trs.tel.map_ncpa):
             self.ao.tel.opdMap_on = trs.tel.map_ncpa
         self.t_initAO = 1000*(time.time() - tstart)
+        self.timing_breakdown_ms = {
+            "ao_system": 1000*(time.perf_counter()-_start_ao_perf)
+        }
 
 
         # INSTANTIATING THE SPATIAL FREQUENCY AND THE FOURIER MODEL
-        if focal_algorithm not in ("legacy", "symmetry"):
+        if focal_algorithm not in ("legacy", "symmetry", "quadrant"):
             raise ValueError("Unknown focal covariance algorithm")
         self.focal_algorithm = focal_algorithm
+        self.focal_cache_dir = focal_cache_dir
+        self.focal_workers = focal_workers
+        _start_dm_filter = time.perf_counter()
         self.Hfilter = 1
         if self.ao.aoMode=="SLAO":
             n_ph = 2*self.ao.dms.nActu1D[0] + 1
             modes = self.ao.dms.setInfluenceFunction(n_ph)
             #val_act = np.argwhere(modes.max(axis=0)==0)
             self.Hfilter = np.dot(modes, modes.T)
+        self.timing_breakdown_ms["dm_influence_filter"] = 1000*(
+            time.perf_counter()-_start_dm_filter
+        )
 
+        _start_frequency = time.perf_counter()
         self.freq = frequencyDomain(
             self.ao, Hfilter=self.Hfilter,
             focal_algorithm=self.focal_algorithm,
+            focal_cache_dir=self.focal_cache_dir,
+            focal_workers=self.focal_workers,
         )
+        self.timing_breakdown_ms["frequency_domain"] = 1000*(time.perf_counter()-_start_frequency)
+        _start_fourier = time.perf_counter()
         self.fao = fourierModel(self.path_ini, calcPSF=False, display=False,
                                 freq=self.freq, ao=self.ao)
+        self.timing_breakdown_ms["fourier_model"] = 1000*(time.perf_counter()-_start_fourier)
 
         self.t_freq = 1000*(time.time() - tstart) - self.t_initAO
 
         # INSTANTIATING THE FITTING PHASE STRUCTURE FUNCTION FOR r0=1m
+        _start_fitting_sf = time.perf_counter()
         self.dphi_fit = self.fitting_phase_structure_function(1)
+        self.timing_breakdown_ms["fitting_sf"] = 1000*(time.perf_counter()-_start_fitting_sf)
         self.t_dfit = 1000*(time.time() - tstart) - self.t_freq
 
         # INSTANTIATING THE ALIASING PHASE STRUCTURE FUNCTION FOR r0=1m
+        _start_aliasing_sf = time.perf_counter()
         self.dphi_alias = self.aliasing_phase_structure_function(1)
+        self.timing_breakdown_ms["aliasing_sf"] = 1000*(time.perf_counter()-_start_aliasing_sf)
         self.t_dalias = 1000*(time.time() - tstart) - self.t_dfit
 
         # INSTANTIATING THE TT RESIDUAL PHASE STRUCTURE FUNCTION IN LGS MODE
+        _start_tt = time.perf_counter()
         if compute_dphi_jitter:
             self.dphi_tt = self.jitter_phase_structure_function()
         else:
             self.dphi_tt = 0*self.dphi_fit
+        self.timing_breakdown_ms["tiptilt_sf"] = 1000*(time.perf_counter()-_start_tt)
         self.t_dtt = 1000*(time.time() - tstart) - self.t_dalias
 
         # INSTANTIATING THE AO RESIDUAL PHASE STRUCTURE FUNCTION
+        _start_ho_sf = time.perf_counter()
         self.dphi_ao = self.residual_phase_structure_function()
+        self.timing_breakdown_ms["ho_sf"] = 1000*(time.perf_counter()-_start_ho_sf)
         self.t_dao = 1000*(time.time() - tstart) - self.t_dtt
 
         # INSTANTIATING THE ANISOPLANATISM PHASE STRUCTURE FUNCTION IF ANY
+        _start_aniso_transfer = time.perf_counter()
         if self.ao.lgs is None or self.ao.lgs.height==0:
             if self.freq.isAniso:
                 self.dphi_ani = self.freq.dani_ang
@@ -195,19 +225,29 @@ class psfR:
             self.dani_tt = self.freq.dani_tt
             self.dphi_ani = self.dani_focang + self.dani_tt
 
+        self.timing_breakdown_ms["anisoplanatism_transfer"] = 1000*(
+            time.perf_counter()-_start_aniso_transfer
+        )
         # COMPUTING THE DETECTOR PIXEL TRANSFER FUNCTION
+        _start_detector_otf = time.perf_counter()
         if self.trs.tel.name!='OOMAO':
             self.otfPixel = self.pixel_optical_transfer_function()
         else:
             self.otfPixel = 1.0
 
+        self.timing_breakdown_ms["detector_pixel_otf"] = 1000*(
+            time.perf_counter()-_start_detector_otf
+        )
         # COMPUTING THE ERROR BREAKDOWN:
+        _start_budget = time.perf_counter()
         self.get_error_breakdown()
+        self.timing_breakdown_ms["error_budget_including_forward"] = 1000*(time.perf_counter()-_start_budget)
 
          # DEFINING BOUNDS
         self.bounds = self.define_bounds()
 
         self.t_init = 1000*(time.time()  - tstart)
+        self.timing_breakdown_ms["psfr_init_total"] = float(self.t_init)
 
     def _repr__(self):
         return 'PSF-Reconstruction model'
@@ -297,6 +337,8 @@ class psfR:
             sampling=self.freq.sampRef, basis=basis,
             covariance_psd_policy=getattr(self, 'ho_covariance_policy', 'strict'),
             covariance_diagnostics=getattr(self, 'ho_covariance_diagnostics', None),
+            vii_method=getattr(self,'ho_vii_method','legacy'),
+            vii_diagnostics=getattr(self,'ho_vii_diagnostics',None),
         )
         return dphi_ao
 
