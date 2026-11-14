@@ -205,8 +205,6 @@ def direct_focal_quadrant_map(
     """
     if type(workers) is not int or workers not in (1, 2, 4):
         raise ValueError("Ialpha workers must be exactly 1, 2 or 4")
-    if workers > 1 and executor is None:
-        raise ValueError("Parallel Ialpha requires a managed thread executor")
     u = np.asarray(pupil_axis_m, dtype=np.float64)
     n = u.size
     if u.ndim != 1 or n < 2 or not np.isfinite(u).all():
@@ -224,6 +222,8 @@ def direct_focal_quadrant_map(
             not np.isfinite(thy) or not (
                 np.isfinite(l0) and l0 > 0 or np.isposinf(l0))):
         raise ValueError("Invalid cone and outer-scale parameters")
+    if workers > 1 and executor is None and not np.isposinf(l0):
+        raise ValueError("Parallel Ialpha requires a managed thread executor")
 
     if np.isposinf(l0):
         def covariance(x, y):
