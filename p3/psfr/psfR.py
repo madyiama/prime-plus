@@ -76,7 +76,7 @@ class psfR:
                  tt_kernel_convention='noll_angular',
                  tt_axis_angle_deg=None, tt_axis_parity='native',
                  focal_algorithm='quadrant', focal_cache_dir=None,
-                 ho_vii_method='factorized_real', focal_workers=4):
+                 ho_vii_method='factorized_real', focal_workers=None):
         """
         Instantiating the psf-reconstruction model from a telemetry object
         """
@@ -159,6 +159,12 @@ class psfR:
         if focal_algorithm not in ("legacy", "symmetry", "quadrant"):
             raise ValueError("Unknown focal covariance algorithm")
         self.focal_algorithm = focal_algorithm
+        if focal_workers is None:
+            focal_workers = 4 if focal_algorithm == 'quadrant' else 1
+        if type(focal_workers) is not int or focal_workers not in (1, 2, 4):
+            raise ValueError('Focal workers must be 1, 2 or 4')
+        if focal_algorithm != 'quadrant' and focal_workers != 1:
+            raise ValueError('Parallel focal Ialpha requires quadrant algorithm')
         self.focal_cache_dir = focal_cache_dir
         self.focal_workers = focal_workers
         _start_dm_filter = time.perf_counter()
