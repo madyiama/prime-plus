@@ -163,17 +163,17 @@ def main():
     ap.add_argument("--config",type=Path,default=DEFAULT_CONFIG)
     ap.add_argument("--output",type=Path,
                     default=Path("results/psfr_v1_acceptance"))
-    ap.add_argument("--focal-workers",type=int,choices=(1,2,4),default=1,
-                    help="CPU Ialpha workers, opt-in with quadrant only")
+    ap.add_argument("--focal-workers",type=int,choices=(1,2,4),default=None,
+                    help="Default 4 with quadrant, 1 for legacy/symmetry")
     ap.add_argument("--focal-algorithm",choices=("legacy", "symmetry", "quadrant"),
-                    default="legacy",
-                    help="Experimental focal covariance accelerator; default unchanged")
+                    default="quadrant",
+                    help="Exact direct quadrant default; reference legacy also selectable")
     ap.add_argument("--focal-cache-dir",type=Path,default=None,
                     help="Disk cache ONLY for unfiltered symmetric focal SF; "
                          "rotation-dependent pupil and OTF are never cached")
     ap.add_argument("--ho-vii-method",choices=("legacy","factorized","factorized_real"),
-                    default="legacy",
-                    help="Opt-in Vii full-FFT or one-sided real-FFT factorization")
+                    default="factorized_real",
+                    help="Factorized real FFT default; historical legacy selectable")
     ap.add_argument("--profile-psfr",action="store_true",
                     help="Optional PSF-R cProfile; timing overhead is expected")
     ap.add_argument("--export-ao-basis",action="store_true",
@@ -181,6 +181,8 @@ def main():
     ap.add_argument("--check-only",action="store_true",
                     help="Check existing case outputs; do not run P3")
     args=ap.parse_args()
+    if args.focal_workers is None:
+        args.focal_workers = 4 if args.focal_algorithm == "quadrant" else 1
     if args.focal_workers != 1 and args.focal_algorithm != "quadrant":
         ap.error("--focal-workers > 1 requires --focal-algorithm quadrant")
     if args.focal_cache_dir is not None and args.focal_algorithm not in ("symmetry", "quadrant"):
