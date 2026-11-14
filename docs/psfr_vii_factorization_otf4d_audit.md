@@ -39,6 +39,13 @@ autocorrelation. This is an experimental option, not a new default.
     git switch --track origin/perf/psfr-vii-factorized-otf4d-audit
     uv sync
 
+    # All candidate/baseline timings: one CPU worker, GPU disabled.
+    export P3_DISABLE_GPU=TRUE
+    export OMP_NUM_THREADS=1
+    export OPENBLAS_NUM_THREADS=1
+    export MKL_NUM_THREADS=1
+    export VECLIB_MAXIMUM_THREADS=1
+
     uv run --with pytest python -m pytest -q \
       tests/test_psfr_vii_factorized.py tests/test_psfr_otf4d_loops.py
     uv run --with pytest python -m pytest -q
