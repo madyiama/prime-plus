@@ -9,7 +9,9 @@ import numpy as np
 import scipy.special as spc
 import p3.aoSystem.FourierUtils as FourierUtils
 from p3.aoSystem.zernike import zernike
-from p3.aoSystem.focalFast import symmetric_focal_layer, grouped_matrix_to_map
+from p3.aoSystem.focalFast import (
+    symmetric_focal_layer, grouped_matrix_to_map, direct_focal_quadrant_map,
+)
 from p3.aoSystem.focalCache import (
     key_for_focal, read_focal_cache, write_focal_cache,
 )
@@ -310,7 +312,7 @@ def focal_angular_function(
         raise ValueError("Unknown focal pupil_grid_mode: " + str(pupil_grid_mode))
     if output_grid not in ('otf', 'native'):
         raise ValueError("Unknown focal output_grid: " + str(output_grid))
-    if covariance_algorithm not in ("legacy", "symmetry"):
+    if covariance_algorithm not in ("legacy", "symmetry", "quadrant"):
         raise ValueError("Unknown focal covariance algorithm: " + str(covariance_algorithm))
     umax = tel.D/2 * max([1,samp])/2
     # The exact Kolmogorov limit must be evaluated analytically, NOT by
@@ -356,7 +358,9 @@ def focal_angular_function(
     # (identity) filter, never a pupil-dependent matrix Hfilter.
     _start_focal = perf_counter()
     _cache_key = None
-    _cache_allowed = (covariance_algorithm == "symmetry"
+    _quadrant_direct = (covariance_algorithm == "quadrant"
+                        and np.isscalar(h_filt))
+    _cache_allowed = (covariance_algorithm in ("symmetry", "quadrant")
                       and focal_cache_dir is not None
                       and np.isscalar(h_filt))
     if focal_diagnostics is not None:
@@ -366,6 +370,11 @@ def focal_angular_function(
                              else ("bypass_filtered" if not np.isscalar(h_filt)
                                    else "not_applicable")),
             "pupil_rotation_or_optical_otf_cached": False,
+            "quadrant_direct": bool(_quadrant_direct),
+            "full_covariance_matrix_allocated": not bool(_quadrant_direct),
+            "quadrant_filtered_fallback": bool(
+                covariance_algorithm == "quadrant" and not _quadrant_direct
+            ),
             "covariance_ms": 0., "grouping_ms": 0.,
             "interpolation_ms": 0., "n_computed_layers": 0,
         })
@@ -373,6 +382,7 @@ def focal_angular_function(
         _cache_key = key_for_focal(
             tel, atm, src, gs, nActu, nOtf, samp,
             pupil_grid_mode=pupil_grid_mode, output_grid=output_grid,
+            algorithm=covariance_algorithm,
         )
         _n_grid = (2*n_ph-1 if output_grid == "native" else nOtf)
         _cache_shape = (int(src.nSrc),int(atm.nL),_n_grid,_n_grid)
@@ -392,8 +402,10 @@ def focal_angular_function(
         u = umax/n_ph * (np.arange(n_ph) - n_ph//2)
     else:
         u = np.linspace(-tel.D/2, tel.D/2, n_ph)
-    X1, Y1, rhoX, rhoY = vector_to_separation(u)
-    _, _, sep_x, sep_y = vector_to_separation(np.arange(n_ph))
+    # Skip construction of n_ph**4 pair coordinate matrices for quadrant.
+    if not _quadrant_direct:
+        X1, Y1, rhoX, rhoY = vector_to_separation(u)
+        _, _, sep_x, sep_y = vector_to_separation(np.arange(n_ph))
     grid_size = (2*n_ph - 1) if output_grid == 'native' else nOtf
     Dani_l = np.zeros((src.nSrc, atm.nL, grid_size, grid_size))
 
@@ -409,35 +421,47 @@ def focal_angular_function(
         cte = 0.12184*0.06*(2*np.pi)**(2.0+5.0/3.0)*a
     else:
         I0 = 3.0/5.0
-        I1 = FourierUtils.Ialpha(f0*rhoX, f0*rhoY)
+        if not _quadrant_direct:
+            I1 = FourierUtils.Ialpha(f0*rhoX, f0*rhoY)
         cte = 0.12184*0.06*(2*np.pi)**2 * outer_scale**(5.0/3.0)
 
     # Opt-in algebraic acceleration. The existing six Flicker terms and
     # matrix_to_map remain the default; direct full Keck image parity is
     # required before enabling this for production telemetry.
-    if covariance_algorithm == 'symmetry':
+    if covariance_algorithm in ('symmetry', 'quadrant'):
         for iSrc in range(src.nSrc):
             thx = dist[0][iSrc]
             thy = dist[1][iSrc]
             for l, zl in enumerate(atm.heights):
                 if zl:
                     _t_cov = perf_counter()
-                    tmp = symmetric_focal_layer(
-                        u, X1, Y1, rhoX, rhoY, sep_x, sep_y,
-                        cone_fraction=zl/gs.height,
-                        theta_shift_x_m=zl*thx,
-                        theta_shift_y_m=zl*thy,
-                        finite_outer_scale_m=outer_scale,
-                    )
+                    if _quadrant_direct:
+                        # Direct aggregation includes the lag grouping.
+                        cmap = direct_focal_quadrant_map(
+                            u, cone_fraction=zl/gs.height,
+                            theta_shift_x_m=zl*thx,
+                            theta_shift_y_m=zl*thy,
+                            finite_outer_scale_m=outer_scale,
+                        )
+                    else:
+                        # Reference or filtered fallback: never omit Hfilter.
+                        tmp = symmetric_focal_layer(
+                            u, X1, Y1, rhoX, rhoY, sep_x, sep_y,
+                            cone_fraction=zl/gs.height,
+                            theta_shift_x_m=zl*thx,
+                            theta_shift_y_m=zl*thy,
+                            finite_outer_scale_m=outer_scale,
+                        )
                     if focal_diagnostics is not None:
                         focal_diagnostics["covariance_ms"] += 1000*(perf_counter()-_t_cov)
                         focal_diagnostics["n_computed_layers"] += 1
-                    _t_group = perf_counter()
-                    if not np.isscalar(h_filt):
-                        tmp = np.dot(h_filt, np.dot(tmp, h_filt_t))
-                    cmap = grouped_matrix_to_map(tmp, sep_x, sep_y)
-                    if focal_diagnostics is not None:
-                        focal_diagnostics["grouping_ms"] += 1000*(perf_counter()-_t_group)
+                    if not _quadrant_direct:
+                        _t_group = perf_counter()
+                        if not np.isscalar(h_filt):
+                            tmp = np.dot(h_filt, np.dot(tmp, h_filt_t))
+                        cmap = grouped_matrix_to_map(tmp, sep_x, sep_y)
+                        if focal_diagnostics is not None:
+                            focal_diagnostics["grouping_ms"] += 1000*(perf_counter()-_t_group)
                     _t_interp = perf_counter()
                     Dani_l[iSrc, l] = (
                         cmap if output_grid == 'native'
