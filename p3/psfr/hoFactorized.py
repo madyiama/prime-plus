@@ -13,6 +13,8 @@ every OTF pixel. Never enable in science runs without checking both
 HO phase SF and the final PSF on the exact Keck acquisition.
 
 No cached pupil/OTF/eigenmodes, parallel workers or GPU.
+For the scientific parity gates and the distinction between experimental
+and nominal refactor branches, see docs/psfr_perf_implementation_guide.md.
 """
 from __future__ import annotations
 
