@@ -687,9 +687,10 @@ def main():
              "on symmetry path; never cache rotated pupil, OTF, HO or TT.",
     )
     parser.add_argument(
-        "--ho-vii-method",choices=("legacy","factorized"),default="legacy",
-        help="Experimental Vii factorization (one squared-mode FFT instead "
-             "of one per mode); requires strict real Keck HO-SF and PSF parity.",
+        "--ho-vii-method",choices=("legacy","factorized","factorized_real"),default="legacy",
+        help="Vii estimator: historical, algebraic complex-FFT factorization, "
+             "or experimental one-sided real-FFT factorization; "
+             "requires Keck science-PSF parity and HO diagnostics.",
     )
     parser.add_argument(
         "--profile-psfr",action="store_true",

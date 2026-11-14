@@ -9,7 +9,9 @@ Created on Fri Jun 15 14:57:49 2018
 #%% Libraries
 import numpy as np
 import numpy.fft as fft
-from p3.psfr.hoFactorized import accumulate_vii_factorized
+from p3.psfr.hoFactorized import (
+    accumulate_vii_factorized, accumulate_vii_factorized_real,
+)
 import p3.aoSystem.FourierUtils as FourierUtils
 import urllib.request
 import os
@@ -122,7 +124,7 @@ def modes2Otf(Cmm, modes, pupil, n_otf, samp=2, basis='Vii',
         - otf, the nOtf x nOtf optical transfer function
         - dphi, the corresponding phase structure function in rad**2
     """
-    if vii_method not in ('legacy','factorized'):
+    if vii_method not in ('legacy','factorized','factorized_real'):
         raise ValueError("Unknown Vii mode reconstruction method")
     if basis!='Vii' and vii_method!='legacy':
         raise ValueError("Vii factorization is only available for basis Vii")
@@ -232,24 +234,29 @@ def modes2Otf(Cmm, modes, pupil, n_otf, samp=2, basis='Vii',
         M_all = M_all.reshape(n_pup, n_pup, nModes)
         M_all = FourierUtils.enlargeSupport(M_all, samp)*pup_pad[:, :, np.newaxis]
 
-        if vii_method=='factorized':
-            buf=accumulate_vii_factorized(
+        if vii_method=='factorized_real':
+            spatial_numerator=accumulate_vii_factorized_real(
                 M_all,ss,conj_pup,diagnostics=vii_diagnostics,
             )
+            dphi=den*fft.fftshift(spatial_numerator)
         else:
-            buf = np.zeros_like(G)
-            for k in range(nModes):
-                Mk = M_all[:, :, k]
-                # Historical Vii calculation: preserve bitwise baseline.
-                Vk = np.real(fft.fft2(Mk**2)*conj_pup) - abs(fft.fft2(Mk))**2
-                # Summing modes into dm basis
-                buf = buf + ss[k] * Vk
-            if vii_diagnostics is not None:
-                vii_diagnostics["mode_count"]=int(nModes)
-                vii_diagnostics["fft2_count_nominal"]=2*int(nModes)
-                vii_diagnostics["numerical_reordering"]=False
-
-        dphi = den*fft.fftshift(np.real(fft.ifft2(2*buf)))
+            if vii_method=='factorized':
+                buf=accumulate_vii_factorized(
+                    M_all,ss,conj_pup,diagnostics=vii_diagnostics,
+                )
+            else:
+                buf = np.zeros_like(G)
+                for k in range(nModes):
+                    Mk = M_all[:, :, k]
+                    # Historical Vii calculation: preserve bitwise baseline.
+                    Vk = np.real(fft.fft2(Mk**2)*conj_pup) - abs(fft.fft2(Mk))**2
+                    # Summing modes into dm basis
+                    buf = buf + ss[k] * Vk
+                if vii_diagnostics is not None:
+                    vii_diagnostics["mode_count"]=int(nModes)
+                    vii_diagnostics["fft2_count_nominal"]=2*int(nModes)
+                    vii_diagnostics["numerical_reordering"]=False
+            dphi = den*fft.fftshift(np.real(fft.ifft2(2*buf)))
         otf = G*np.exp(-0.5*dphi)
 
     elif np.any(Cmm) and basis=="Uij":
