@@ -677,13 +677,12 @@ def main():
              "fitting; require strict nominal Keck PSF parity.",
     )
     parser.add_argument(
-        "--focal-workers",type=int,choices=(1,2,4),default=1,
-        help="Exact CPU Ialpha workers for quadrant focal only (default 1)",
+        "--focal-workers",type=int,choices=(1,2,4),default=None,
+        help="CPU Ialpha workers (default: 4 with quadrant, 1 with legacy/symmetry)",
     )
     parser.add_argument(
-        "--focal-algorithm",choices=("legacy", "symmetry", "quadrant"),default="legacy",
-        help="Focal anisoplanatism covariance evaluation: historical (default) "
-             "or opt-in symmetry/quadrant acceleration (requires Keck parity check)",
+        "--focal-algorithm",choices=("legacy", "symmetry", "quadrant"),default="quadrant",
+        help="Focal covariance: exact direct quadrant (default), symmetry or historical legacy",
     )
     parser.add_argument(
         "--focal-cache-dir",type=Path,default=None,
@@ -691,10 +690,9 @@ def main():
              "on symmetry path; never cache rotated pupil, OTF, HO or TT.",
     )
     parser.add_argument(
-        "--ho-vii-method",choices=("legacy","factorized","factorized_real"),default="legacy",
-        help="Vii estimator: historical, algebraic complex-FFT factorization, "
-             "or experimental one-sided real-FFT factorization; "
-             "requires Keck science-PSF parity and HO diagnostics.",
+        "--ho-vii-method",choices=("legacy","factorized","factorized_real"),default="factorized_real",
+        help="Vii: factorized real FFT (default), factorized or reference legacy; "
+             "retain HO covariance strict policy and diagnose scientific parity.",
     )
     parser.add_argument(
         "--profile-psfr",action="store_true",
@@ -702,6 +700,8 @@ def main():
              "top cumulative functions (profiled wall time has overhead).",
     )
     args = parser.parse_args()
+    if args.focal_workers is None:
+        args.focal_workers = 4 if args.focal_algorithm == "quadrant" else 1
     if args.focal_workers != 1 and args.focal_algorithm != "quadrant":
         parser.error("--focal-workers > 1 requires --focal-algorithm quadrant")
     if args.focal_cache_dir is not None and args.focal_algorithm not in ("symmetry", "quadrant"):
@@ -1134,6 +1134,14 @@ def main():
     else:
         model=stage("psfR",_construct_psfr)
 
+    # Preserve the structured refactor timing contract from PR #34 in
+    # addition to the performance-stack report (which has finer focal data).
+    from p3.psfr.timing import psfr_timing_report
+    timing_report = psfr_timing_report(model)
+    (args.output / "psfr_timing_breakdown.json").write_text(
+        json.dumps(timing_report, indent=2, allow_nan=False),
+        encoding="utf-8",
+    )
     profile_report={
         "units":"milliseconds",
         "psfr_stage_timings_ms":model.timing_breakdown_ms,
