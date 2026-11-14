@@ -25,13 +25,20 @@ from p3.psfr.template import (
 from scripts.keck_psfr_v1_e2e import validate_run
 
 
-def export_keck_case(case, *, pixel_scale_mas, output=None):
+def export_keck_case(case, *, pixel_scale_mas=None, output=None):
     """Refuse nonnominal, incomplete or modified V1 cases before export."""
     directory=Path(case)
     acceptance=validate_run(directory)
     metadata=json.loads((directory/"metadata.json").read_text(encoding="utf-8"))
     recorded_scale=metadata.get("camera_pixel_scale_mas")
-    if recorded_scale is not None and not np.isclose(
+    if pixel_scale_mas is None:
+        if recorded_scale is None:
+            raise ValueError(
+                "No camera pixel scale in old results: pass --pixel-scale-mas "
+                "explicitly from the NIRC2 camera calibration"
+            )
+        pixel_scale_mas=float(recorded_scale)
+    elif recorded_scale is not None and not np.isclose(
         float(recorded_scale),float(pixel_scale_mas),
         rtol=1e-8,atol=1e-8
     ):
@@ -92,8 +99,8 @@ def export_keck_case(case, *, pixel_scale_mas, output=None):
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--case",type=Path,required=True)
-    parser.add_argument("--pixel-scale-mas",type=float,required=True,
-                        help="Positive detector mas/pixel from the actual FITS camera")
+    parser.add_argument("--pixel-scale-mas",type=float,default=None,
+                        help="Override detector scale; verified against Keck case metadata")
     parser.add_argument("--output",type=Path,default=None)
     args=parser.parse_args()
     path=export_keck_case(
