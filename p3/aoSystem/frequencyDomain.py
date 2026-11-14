@@ -127,7 +127,8 @@ class frequencyDomain():
 
     def __init__(self, aoSys, kcExt=None, nyquistSampling=False,
                  Hfilter=1, computeFocalAnisoCov=True, dtype=np.float64,
-                 focal_algorithm="legacy", focal_cache_dir=None):
+                 focal_algorithm="legacy", focal_cache_dir=None,
+                 focal_workers=1):
 
         self.dtype = dtype
         if self.dtype == np.float32:
@@ -152,6 +153,7 @@ class frequencyDomain():
             raise ValueError("Unknown focal algorithm: " + str(focal_algorithm))
         self.focal_algorithm = focal_algorithm
         self.focal_cache_dir = focal_cache_dir
+        self.focal_workers = focal_workers
         self.focal_diagnostics = {}
 
         # MANAGING THE WAVELENGTH
@@ -478,7 +480,8 @@ class frequencyDomain():
                                               self.sampRef, self.ao.dms.nActu1D,
                                               focal_algorithm=self.focal_algorithm,
                                               focal_cache_dir=self.focal_cache_dir,
-                                              focal_diagnostics=self.focal_diagnostics)
+                                              focal_diagnostics=self.focal_diagnostics,
+                                              focal_workers=self.focal_workers)
 
             return ( (self.dani_focang + self.dani_tt) \
                      * Cn2[np.newaxis,:,np.newaxis,np.newaxis]).sum(axis=1)

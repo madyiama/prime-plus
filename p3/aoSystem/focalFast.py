@@ -16,6 +16,46 @@ import numpy as np
 from p3.aoSystem import FourierUtils
 
 
+
+def parallel_ialpha(x, y, *, executor=None, workers=1,
+                    min_chunk_elements=4096, diagnostics=None):
+    """Evaluate the *unchanged* SciPy Ialpha kernel in deterministic row chunks.
+
+    Only the independent elementwise radial McDonald evaluations are
+    parallelized; all subsequent 6-term arithmetic and bincount reductions
+    remain single-threaded and preserve the original order. Input arrays are
+    broadcast as zero-copy views, not materialized pair-cubes. Each worker
+    writes to a private result and the caller assembles rows in order.
+
+    The executor is owned by the caller and reused for all focal layers.
+    No interpolation, approximations or float32. Small arrays remain serial
+    to avoid overhead; L0=infinity never calls this function.
+    """
+    if type(workers) is not int or workers not in (1, 2, 4):
+        raise ValueError("Ialpha workers must be exactly 1, 2 or 4")
+    a, b = np.broadcast_arrays(np.asarray(x, dtype=np.float64),
+                               np.asarray(y, dtype=np.float64))
+    if (executor is None or workers == 1 or a.ndim != 2 or
+            a.size < workers*min_chunk_elements or a.shape[0] < workers):
+        if diagnostics is not None:
+            diagnostics["ialpha_serial_calls"] = diagnostics.get(
+                "ialpha_serial_calls", 0) + 1
+        return FourierUtils.Ialpha(a, b)
+    if diagnostics is not None:
+        diagnostics["ialpha_parallel_calls"] = diagnostics.get(
+            "ialpha_parallel_calls", 0) + 1
+    edges = np.linspace(0, a.shape[0], workers+1, dtype=np.intp)
+    tasks = [
+        executor.submit(FourierUtils.Ialpha, a[edges[i]:edges[i+1]],
+                        b[edges[i]:edges[i+1]])
+        for i in range(workers)
+    ]
+    out = np.empty(a.shape, dtype=np.float64)
+    for i, task in enumerate(tasks):
+        out[edges[i]:edges[i+1]] = task.result()
+    return out
+
+
 def grouped_matrix_to_map(matrix, sep_x, sep_y):
     """Same negative-quadrant mean + reflection as legacy matrix_to_map.
 
@@ -149,7 +189,7 @@ def symmetric_focal_layer(
 
 def direct_focal_quadrant_map(
     pupil_axis_m, *, cone_fraction, theta_shift_x_m, theta_shift_y_m,
-    finite_outer_scale_m,
+    finite_outer_scale_m, workers=1, executor=None, diagnostics=None,
 ):
     """Flicker six-term covariance, directly averaged over the legacy quadrant.
 
@@ -163,6 +203,8 @@ def direct_focal_quadrant_map(
     only for the scalar/identity Hfilter path; the caller must fall back
     to the original full matrix before a non-scalar spatial filter.
     """
+    if type(workers) is not int or workers not in (1, 2, 4):
+        raise ValueError("Ialpha workers must be exactly 1, 2 or 4")
     u = np.asarray(pupil_axis_m, dtype=np.float64)
     n = u.size
     if u.ndim != 1 or n < 2 or not np.isfinite(u).all():
@@ -180,6 +222,8 @@ def direct_focal_quadrant_map(
             not np.isfinite(thy) or not (
                 np.isfinite(l0) and l0 > 0 or np.isposinf(l0))):
         raise ValueError("Invalid cone and outer-scale parameters")
+    if workers > 1 and executor is None and not np.isposinf(l0):
+        raise ValueError("Parallel Ialpha requires a managed thread executor")
 
     if np.isposinf(l0):
         def covariance(x, y):
@@ -187,7 +231,8 @@ def direct_focal_quadrant_map(
     else:
         f0 = 2*np.pi/l0
         def covariance(x, y):
-            return FourierUtils.Ialpha(f0*x, f0*y)
+            return parallel_ialpha(f0*x, f0*y, executor=executor,
+                                   workers=workers, diagnostics=diagnostics)
 
     # Exactly the legacy negative-lag selection. Its two axes run in
     # opposite index directions because of vector_to_separation's

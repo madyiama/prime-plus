@@ -677,6 +677,10 @@ def main():
              "fitting; require strict nominal Keck PSF parity.",
     )
     parser.add_argument(
+        "--focal-workers",type=int,choices=(1,2,4),default=1,
+        help="Exact CPU Ialpha workers for quadrant focal only (default 1)",
+    )
+    parser.add_argument(
         "--focal-algorithm",choices=("legacy", "symmetry", "quadrant"),default="legacy",
         help="Focal anisoplanatism covariance evaluation: historical (default) "
              "or opt-in symmetry/quadrant acceleration (requires Keck parity check)",
@@ -698,6 +702,8 @@ def main():
              "top cumulative functions (profiled wall time has overhead).",
     )
     args = parser.parse_args()
+    if args.focal_workers != 1 and args.focal_algorithm != "quadrant":
+        parser.error("--focal-workers > 1 requires --focal-algorithm quadrant")
     if args.focal_cache_dir is not None and args.focal_algorithm not in ("symmetry", "quadrant"):
         parser.error("--focal-cache-dir requires --focal-algorithm symmetry or quadrant")
     if args.p3_pupil_parity != "native" and args.p3_pupil_resampling != "physical_binary":
@@ -1105,6 +1111,7 @@ def main():
             tt_axis_parity=args.tt_axis_parity,
             focal_algorithm=args.focal_algorithm,
             focal_cache_dir=args.focal_cache_dir,
+            focal_workers=args.focal_workers,
             ho_vii_method=args.ho_vii_method,
         )
 
@@ -1666,6 +1673,7 @@ def main():
         "observed_cutout_file": "observed_nirc2_cutout.npy",
         "observed_cutout_origin": "telemetryKeck.trs.cam.image",
         "focal_anisoplanatism_algorithm": args.focal_algorithm,
+        "focal_workers": args.focal_workers,
         "focal_geometric_cache": model.freq.focal_diagnostics,
         "focal_cache_configured": bool(args.focal_cache_dir is not None),
         "psfr_profile_report_file": "psfr_profile_breakdown.json",
