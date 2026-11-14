@@ -17,7 +17,8 @@ from p3.aoSystem import FourierUtils
 
 
 
-def parallel_ialpha(x, y, *, executor=None, workers=1, min_chunk_elements=4096):
+def parallel_ialpha(x, y, *, executor=None, workers=1,
+                    min_chunk_elements=4096, diagnostics=None):
     """Evaluate the *unchanged* SciPy Ialpha kernel in deterministic row chunks.
 
     Only the independent elementwise radial McDonald evaluations are
@@ -36,7 +37,13 @@ def parallel_ialpha(x, y, *, executor=None, workers=1, min_chunk_elements=4096):
                                np.asarray(y, dtype=np.float64))
     if (executor is None or workers == 1 or a.ndim != 2 or
             a.size < workers*min_chunk_elements or a.shape[0] < workers):
+        if diagnostics is not None:
+            diagnostics["ialpha_serial_calls"] = diagnostics.get(
+                "ialpha_serial_calls", 0) + 1
         return FourierUtils.Ialpha(a, b)
+    if diagnostics is not None:
+        diagnostics["ialpha_parallel_calls"] = diagnostics.get(
+            "ialpha_parallel_calls", 0) + 1
     edges = np.linspace(0, a.shape[0], workers+1, dtype=np.intp)
     tasks = [
         executor.submit(FourierUtils.Ialpha, a[edges[i]:edges[i+1]],
@@ -182,7 +189,7 @@ def symmetric_focal_layer(
 
 def direct_focal_quadrant_map(
     pupil_axis_m, *, cone_fraction, theta_shift_x_m, theta_shift_y_m,
-    finite_outer_scale_m, workers=1, executor=None,
+    finite_outer_scale_m, workers=1, executor=None, diagnostics=None,
 ):
     """Flicker six-term covariance, directly averaged over the legacy quadrant.
 
@@ -225,7 +232,7 @@ def direct_focal_quadrant_map(
         f0 = 2*np.pi/l0
         def covariance(x, y):
             return parallel_ialpha(f0*x, f0*y, executor=executor,
-                                   workers=workers)
+                                   workers=workers, diagnostics=diagnostics)
 
     # Exactly the legacy negative-lag selection. Its two axes run in
     # opposite index directions because of vector_to_separation's
