@@ -16,6 +16,8 @@ from p3.aoSystem.focalCache import (
     key_for_focal, read_focal_cache, write_focal_cache,
 )
 from time import perf_counter
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 
 #%% VARIANCE
 def anisoplanatism_wfe(tel, atm, src, ngs, dtype=np.float64):
@@ -172,7 +174,8 @@ def focal_anisoplanatism_variance(tel, atm, lgs):
 #%% PHASE STRUCTURE FUNCTION
 def anisoplanatism_structure_function(tel, atm, src, lgs, ngs,
                                       nOtf, samp, nActu, msk_in=1, Hfilter=1, focal_algorithm='legacy',
-                                       focal_cache_dir=None, focal_diagnostics=None):
+                                       focal_cache_dir=None, focal_diagnostics=None,
+                                       focal_workers=1):
     """
     Computes the anisoplanatic phase structure functions
     INPUTS:
@@ -207,7 +210,8 @@ def anisoplanatism_structure_function(tel, atm, src, lgs, ngs,
                                           h_filt=Hfilter,
                                           covariance_algorithm=focal_algorithm,
                                           focal_cache_dir=focal_cache_dir,
-                                          focal_diagnostics=focal_diagnostics)
+                                          focal_diagnostics=focal_diagnostics,
+                                          focal_workers=focal_workers)
         # angular anisoplanatism only
         lgs.zenith = lgs_dir[0]
         lgs.azimuth = lgs_dir[1]
@@ -291,7 +295,7 @@ def focal_angular_function(
     tel, atm, src, gs, nActu, nOtf, samp, h_filt=1,
     *, pupil_grid_mode='legacy', output_grid='otf',
     covariance_algorithm='legacy', focal_cache_dir=None,
-    focal_diagnostics=None,
+    focal_diagnostics=None, focal_workers=1,
 ):
     """
     Returns the nActu**2 x nActu**2 point wise phase structure function
@@ -314,6 +318,10 @@ def focal_angular_function(
         raise ValueError("Unknown focal output_grid: " + str(output_grid))
     if covariance_algorithm not in ("legacy", "symmetry", "quadrant"):
         raise ValueError("Unknown focal covariance algorithm: " + str(covariance_algorithm))
+    if type(focal_workers) is not int or focal_workers not in (1, 2, 4):
+        raise ValueError("Focal Ialpha workers must be 1, 2 or 4")
+    if focal_workers != 1 and covariance_algorithm != "quadrant":
+        raise ValueError("Parallel Ialpha is available only with focal quadrant")
     umax = tel.D/2 * max([1,samp])/2
     # The exact Kolmogorov limit must be evaluated analytically, NOT by
     # setting L0 to an enormous finite value: the McDonald covariance
@@ -371,6 +379,12 @@ def focal_angular_function(
                                    else "not_applicable")),
             "pupil_rotation_or_optical_otf_cached": False,
             "quadrant_direct": bool(_quadrant_direct),
+            "ialpha_workers_requested": focal_workers,
+            "ialpha_workers_effective": (
+                focal_workers if _quadrant_direct and not kolmogorov_limit else 1
+            ),
+            "ialpha_parallel_calls": 0,
+            "ialpha_serial_calls": 0,
             "full_covariance_matrix_allocated": not bool(_quadrant_direct),
             "quadrant_filtered_fallback": bool(
                 covariance_algorithm == "quadrant" and not _quadrant_direct
@@ -392,6 +406,7 @@ def focal_angular_function(
         )
         if _cached_sf is not None:
             if focal_diagnostics is not None:
+                focal_diagnostics["ialpha_workers_effective"] = 0
                 focal_diagnostics["total_ms"] = 1000*(perf_counter()-_start_focal)
             return _cached_sf
 
@@ -428,56 +443,64 @@ def focal_angular_function(
     # Opt-in algebraic acceleration. The existing six Flicker terms and
     # matrix_to_map remain the default; direct full Keck image parity is
     # required before enabling this for production telemetry.
-    if covariance_algorithm in ('symmetry', 'quadrant'):
-        for iSrc in range(src.nSrc):
-            thx = dist[0][iSrc]
-            thy = dist[1][iSrc]
-            for l, zl in enumerate(atm.heights):
-                if zl:
-                    _t_cov = perf_counter()
-                    if _quadrant_direct:
-                        # Direct aggregation includes the lag grouping.
-                        cmap = direct_focal_quadrant_map(
-                            u, cone_fraction=zl/gs.height,
-                            theta_shift_x_m=zl*thx,
-                            theta_shift_y_m=zl*thy,
-                            finite_outer_scale_m=outer_scale,
-                        )
-                    else:
-                        # Reference or filtered fallback: never omit Hfilter.
-                        tmp = symmetric_focal_layer(
-                            u, X1, Y1, rhoX, rhoY, sep_x, sep_y,
-                            cone_fraction=zl/gs.height,
-                            theta_shift_x_m=zl*thx,
-                            theta_shift_y_m=zl*thy,
-                            finite_outer_scale_m=outer_scale,
-                        )
-                    if focal_diagnostics is not None:
-                        focal_diagnostics["covariance_ms"] += 1000*(perf_counter()-_t_cov)
-                        focal_diagnostics["n_computed_layers"] += 1
-                    if not _quadrant_direct:
-                        _t_group = perf_counter()
-                        if not np.isscalar(h_filt):
-                            tmp = np.dot(h_filt, np.dot(tmp, h_filt_t))
-                        cmap = grouped_matrix_to_map(tmp, sep_x, sep_y)
+    _pool_context = (
+        ThreadPoolExecutor(max_workers=focal_workers)
+        if (_quadrant_direct and not kolmogorov_limit and focal_workers > 1)
+        else nullcontext(None)
+    )
+    with _pool_context as focal_pool:
+        if covariance_algorithm in ('symmetry', 'quadrant'):
+            for iSrc in range(src.nSrc):
+                thx = dist[0][iSrc]
+                thy = dist[1][iSrc]
+                for l, zl in enumerate(atm.heights):
+                    if zl:
+                        _t_cov = perf_counter()
+                        if _quadrant_direct:
+                            # Direct aggregation includes the lag grouping.
+                            cmap = direct_focal_quadrant_map(
+                                u, cone_fraction=zl/gs.height,
+                                theta_shift_x_m=zl*thx,
+                                theta_shift_y_m=zl*thy,
+                                finite_outer_scale_m=outer_scale,
+                                workers=focal_workers, executor=focal_pool,
+                                diagnostics=focal_diagnostics,
+                            )
+                        else:
+                            # Reference or filtered fallback: never omit Hfilter.
+                            tmp = symmetric_focal_layer(
+                                u, X1, Y1, rhoX, rhoY, sep_x, sep_y,
+                                cone_fraction=zl/gs.height,
+                                theta_shift_x_m=zl*thx,
+                                theta_shift_y_m=zl*thy,
+                                finite_outer_scale_m=outer_scale,
+                            )
                         if focal_diagnostics is not None:
-                            focal_diagnostics["grouping_ms"] += 1000*(perf_counter()-_t_group)
-                    _t_interp = perf_counter()
-                    Dani_l[iSrc, l] = (
-                        cmap if output_grid == 'native'
-                        else FourierUtils.interpolateSupport(cmap, nOtf)
-                    )
-                    if focal_diagnostics is not None:
-                        focal_diagnostics["interpolation_ms"] += 1000*(perf_counter()-_t_interp)
-        _focal_output = cte*Dani_l
-        if _cache_allowed:
-            write_focal_cache(
-                focal_cache_dir, _cache_key, _focal_output,
-                diagnostics=focal_diagnostics,
-            )
-        if focal_diagnostics is not None:
-            focal_diagnostics["total_ms"] = 1000*(perf_counter()-_start_focal)
-        return _focal_output
+                            focal_diagnostics["covariance_ms"] += 1000*(perf_counter()-_t_cov)
+                            focal_diagnostics["n_computed_layers"] += 1
+                        if not _quadrant_direct:
+                            _t_group = perf_counter()
+                            if not np.isscalar(h_filt):
+                                tmp = np.dot(h_filt, np.dot(tmp, h_filt_t))
+                            cmap = grouped_matrix_to_map(tmp, sep_x, sep_y)
+                            if focal_diagnostics is not None:
+                                focal_diagnostics["grouping_ms"] += 1000*(perf_counter()-_t_group)
+                        _t_interp = perf_counter()
+                        Dani_l[iSrc, l] = (
+                            cmap if output_grid == 'native'
+                            else FourierUtils.interpolateSupport(cmap, nOtf)
+                        )
+                        if focal_diagnostics is not None:
+                            focal_diagnostics["interpolation_ms"] += 1000*(perf_counter()-_t_interp)
+            _focal_output = cte*Dani_l
+            if _cache_allowed:
+                write_focal_cache(
+                    focal_cache_dir, _cache_key, _focal_output,
+                    diagnostics=focal_diagnostics,
+                )
+            if focal_diagnostics is not None:
+                focal_diagnostics["total_ms"] = 1000*(perf_counter()-_start_focal)
+            return _focal_output
 
     # Anisoplanatism Structure Function
     for iSrc in range(src.nSrc):
