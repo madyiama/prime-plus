@@ -126,7 +126,9 @@ class frequencyDomain():
         self._phaseMap = val
 
     def __init__(self, aoSys, kcExt=None, nyquistSampling=False,
-                 Hfilter=1, computeFocalAnisoCov=True, dtype=np.float64):
+                 Hfilter=1, computeFocalAnisoCov=True, dtype=np.float64,
+                 focal_algorithm="quadrant", focal_cache_dir=None,
+                 focal_workers=None):
 
         self.dtype = dtype
         if self.dtype == np.float32:
@@ -147,6 +149,18 @@ class frequencyDomain():
             self.kcExt = None
 
         self.Hfilter = Hfilter
+        if focal_algorithm not in ("legacy", "symmetry", "quadrant"):
+            raise ValueError("Unknown focal algorithm: " + str(focal_algorithm))
+        self.focal_algorithm = focal_algorithm
+        if focal_workers is None:
+            focal_workers = 4 if focal_algorithm == 'quadrant' else 1
+        if type(focal_workers) is not int or focal_workers not in (1, 2, 4):
+            raise ValueError('Focal workers must be 1, 2 or 4')
+        if focal_algorithm != 'quadrant' and focal_workers != 1:
+            raise ValueError('Parallel focal Ialpha requires quadrant algorithm')
+        self.focal_cache_dir = focal_cache_dir
+        self.focal_workers = focal_workers
+        self.focal_diagnostics = {}
 
         # MANAGING THE WAVELENGTH
         self.nBin = self.ao.cam.nWvl # number of spectral bins for polychromatic PSFs
@@ -469,7 +483,11 @@ class frequencyDomain():
             self.dani_focang, self.dani_ang, self.dani_tt = \
             anisoplanatism_structure_function(self.ao.tel, self.ao.atm, self.ao.src,
                                               self.ao.lgs, self.ao.ngs, self.nOtf,
-                                              self.sampRef, self.ao.dms.nActu1D)
+                                              self.sampRef, self.ao.dms.nActu1D,
+                                              focal_algorithm=self.focal_algorithm,
+                                              focal_cache_dir=self.focal_cache_dir,
+                                              focal_diagnostics=self.focal_diagnostics,
+                                              focal_workers=self.focal_workers)
 
             return ( (self.dani_focang + self.dani_tt) \
                      * Cn2[np.newaxis,:,np.newaxis,np.newaxis]).sum(axis=1)

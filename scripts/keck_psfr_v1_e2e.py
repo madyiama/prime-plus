@@ -163,9 +163,30 @@ def main():
     ap.add_argument("--config",type=Path,default=DEFAULT_CONFIG)
     ap.add_argument("--output",type=Path,
                     default=Path("results/psfr_v1_acceptance"))
+    ap.add_argument("--focal-workers",type=int,choices=(1,2,4),default=None,
+                    help="Default 4 with quadrant, 1 for legacy/symmetry")
+    ap.add_argument("--focal-algorithm",choices=("legacy", "symmetry", "quadrant"),
+                    default="quadrant",
+                    help="Exact direct quadrant default; reference legacy also selectable")
+    ap.add_argument("--focal-cache-dir",type=Path,default=None,
+                    help="Disk cache ONLY for unfiltered symmetric focal SF; "
+                         "rotation-dependent pupil and OTF are never cached")
+    ap.add_argument("--ho-vii-method",choices=("legacy","factorized","factorized_real"),
+                    default="factorized_real",
+                    help="Factorized real FFT default; historical legacy selectable")
+    ap.add_argument("--profile-psfr",action="store_true",
+                    help="Optional PSF-R cProfile; timing overhead is expected")
+    ap.add_argument("--export-ao-basis",action="store_true",
+                    help="Export frozen AO phase SF + optical kernels and validate nominal parity")
     ap.add_argument("--check-only",action="store_true",
                     help="Check existing case outputs; do not run P3")
     args=ap.parse_args()
+    if args.focal_workers is None:
+        args.focal_workers = 4 if args.focal_algorithm == "quadrant" else 1
+    if args.focal_workers != 1 and args.focal_algorithm != "quadrant":
+        ap.error("--focal-workers > 1 requires --focal-algorithm quadrant")
+    if args.focal_cache_dir is not None and args.focal_algorithm not in ("symmetry", "quadrant"):
+        ap.error("--focal-cache-dir requires --focal-algorithm symmetry or quadrant")
     if len(args.fits)!=len(args.sav):
         ap.error("Each FITS requires a matching SAV at the same argument index")
     if len({p.stem for p in args.fits})!=len(args.fits):
@@ -180,6 +201,11 @@ def main():
         "source_branch_requirement":"merged_P4_A_P4_C_core",
         "science_validation":"not_a_calibrated_Keck_2020_model",
         "method":"van_dam+legacy_psfr+unity+noll_angular",
+        "focal_anisoplanatism_algorithm":args.focal_algorithm,
+        "focal_workers":args.focal_workers,
+        "focal_cache_configured":bool(args.focal_cache_dir is not None),
+        "cprofile_enabled":bool(args.profile_psfr),
+        "ho_vii_method":args.ho_vii_method,
         "cases":[],
     }
     failures=0
@@ -204,6 +230,19 @@ def main():
                 "--tt-axis-parity","native",
                 "--ho-covariance-policy","strict",
             ]
+            if args.focal_cache_dir is not None:
+                cmd.extend(("--focal-cache-dir",
+                            str(args.focal_cache_dir.resolve())))
+            if args.profile_psfr:
+                cmd.append("--profile-psfr")
+            if args.ho_vii_method!="legacy":
+                cmd.extend(("--ho-vii-method",args.ho_vii_method))
+            if args.export_ao_basis:
+                cmd.append("--export-ao-basis")
+            if args.focal_algorithm != "legacy":
+                cmd.extend(("--focal-algorithm",args.focal_algorithm))
+            if args.focal_workers != 1:
+                cmd.extend(("--focal-workers",str(args.focal_workers)))
             entry["command"]=cmd
             print("[PSFR V1] Reconstructing",fits.name,flush=True)
             with (destination/"psfr_v1_run.log").open("w",encoding="utf-8") as log:
@@ -215,7 +254,21 @@ def main():
                 entry["status"]="reconstruction_failed"
                 entry["log"]=str(destination/"psfr_v1_run.log")
                 report["cases"].append(entry)
-                print("[PSFR V1] FAIL:",entry["log"],flush=True)
+                print("[PSFR V1] FAIL:",entry["log"],
+                      "returncode=",result.returncode,flush=True)
+                # Surface the traceback: without this, the parent merely
+                # prints FAIL and conceals the underlying Keck exception.
+                # Preserve the entire diagnostic in psfr_v1_run.log.
+                try:
+                    tail=(destination/"psfr_v1_run.log").read_text(
+                        encoding="utf-8",errors="replace"
+                    ).splitlines()[-65:]
+                    print("[PSFR V1] ---- last 65 log lines ----",flush=True)
+                    print("\n".join(tail),flush=True)
+                    print("[PSFR V1] ---- end log ----",flush=True)
+                    entry["log_tail"]=tail
+                except OSError as err:
+                    print("[PSFR V1] log unreadable:",err,flush=True)
                 continue
         try:
             entry.update(validate_run(destination))

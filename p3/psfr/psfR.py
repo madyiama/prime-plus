@@ -17,6 +17,11 @@ from p3.aoSystem.aoSystem import aoSystem
 from p3.aoSystem.fourierModel import fourierModel
 import p3.aoSystem.FourierUtils as FourierUtils
 import p3.psfr.psfrUtils as psfrUtils
+from p3.psfr.ho import estimate_ho_statistics, reconstruct_ho_otf
+from p3.psfr.structure import (
+    assemble_phase_structure_function,
+    normalize_anisoplanatism_zero_lag as _anisoplanatism_zero_lag,
+)
 from p3.aoSystem.frequencyDomain import frequencyDomain as frequencyDomain
 from p3.aoSystem.ttFrame import sensor_frame_frequencies
 from p3.aoSystem.ttAngular import (
@@ -51,6 +56,30 @@ def _sqrt_checked_variance(variance, label):
     return np.sqrt(variance)
 
 
+
+def _psfr_memory_checkpoint(stage):
+    """Log current Linux RSS before an external kill, without altering PSF arrays.
+
+    Do not interpret SIGKILL or RSS alone as proof of OOM: inspect Linux
+    cgroup memory.events and container limits in Keck PSF Lab.
+    """
+    if not sys.platform.startswith("linux"):
+        return
+    rss_mb = None
+    try:
+        with open("/proc/self/status", encoding="ascii") as status:
+            for line in status:
+                if line.startswith("VmRSS:"):
+                    rss_mb = float(line.split()[1]) / 1024.0
+                    break
+    except (OSError, ValueError, IndexError):
+        pass
+    if rss_mb is not None:
+        print(f"[psfR memory] {stage}: RSS={rss_mb:.1f} MiB", flush=True)
+    else:
+        print(f"[psfR memory] {stage}: RSS unavailable", flush=True)
+
+
 def _integrate_spectral_psf(psf):
     """Combine spectral slices into the 2-D broadband image for a Strehl check."""
     if psf.ndim == 2:
@@ -58,29 +87,6 @@ def _integrate_spectral_psf(psf):
     if psf.ndim == 3:
         return np.sum(psf, axis=-1)
     raise ValueError("Expected a 2-D PSF or a 3-D wavelength cube")
-
-
-def _anisoplanatism_zero_lag(dphi):
-    """Enforce the OTF normalization Dphi(delta=0)=0, per source.
-
-    The interpolated Keck focal-angular anisoplanatism map may carry a
-    nonzero additive offset at the discrete zero-baseline OTF sample.
-    The constant scales the entire OTF but cancels when the PSF is
-    flux-normalized. It DOES bias the OTF-based Strehl and any WFE
-    converted from that Strehl. Subtracting the reference at the central
-    OTF sample changes neither the PSF shape nor the normalized energy.
-
-    Input is [y, x] or [y, x, source], phase rad^2 at science wavelength.
-    This removes only the DC offset; it does not change the spatially
-    varying anisoplanatism model or the Hardy analytical coefficients.
-    """
-    dphi = np.asarray(dphi, dtype=float)
-    if dphi.ndim not in (2, 3) or min(dphi.shape[:2]) < 2:
-        raise ValueError("Anisoplanatism dphi must be [y,x] or [y,x,source]")
-    if not np.all(np.isfinite(dphi)):
-        raise ValueError("Anisoplanatism dphi contains non-finite samples")
-    centre = (dphi.shape[0]//2, dphi.shape[1]//2)
-    return dphi - dphi[centre]
 
 
 class psfR:
@@ -92,13 +98,16 @@ class psfR:
                  tt_mirror_model='unity', tt_welch_nperseg=512,
                  ho_covariance_policy='strict',
                  tt_kernel_convention='noll_angular',
-                 tt_axis_angle_deg=None, tt_axis_parity='native'):
+                 tt_axis_angle_deg=None, tt_axis_parity='native',
+                 focal_algorithm='quadrant', focal_cache_dir=None,
+                 ho_vii_method='factorized_real', focal_workers=None):
         """
         Instantiating the psf-reconstruction model from a telemetry object
         """
 
         # INSTANTIATING THE MODEL OF THE AOSYSTEM
         tstart = time.time()
+        _start_ao_perf = time.perf_counter()
 
         if not hasattr(trs,'path_ini'):
             raise ValueError("no .ini file attached with the telemetry object")
@@ -144,7 +153,13 @@ class psfR:
             )
         self.ho_covariance_policy = ho_covariance_policy
         self.ho_covariance_diagnostics = {}
+        if ho_vii_method not in ('legacy','factorized','factorized_real'):
+            raise ValueError("Unknown HO Vii method")
+        self.ho_vii_method = ho_vii_method
+        self.ho_vii_diagnostics = {}
+        _psfr_memory_checkpoint('aoSystem start')
         self.ao = aoSystem(self.path_ini, path_root=path_root)
+        _psfr_memory_checkpoint('aoSystem done')
 
         # defining the number of model parameters
         self.tag = 'PSF-R'
@@ -161,42 +176,82 @@ class psfR:
         if self.ao.tel.path_static_on and hasattr(trs.tel,'map_ncpa')and np.any(trs.tel.map_ncpa):
             self.ao.tel.opdMap_on = trs.tel.map_ncpa
         self.t_initAO = 1000*(time.time() - tstart)
+        self.timing_breakdown_ms = {
+            "ao_system": 1000*(time.perf_counter()-_start_ao_perf)
+        }
 
 
         # INSTANTIATING THE SPATIAL FREQUENCY AND THE FOURIER MODEL
+        if focal_algorithm not in ("legacy", "symmetry", "quadrant"):
+            raise ValueError("Unknown focal covariance algorithm")
+        self.focal_algorithm = focal_algorithm
+        if focal_workers is None:
+            focal_workers = 4 if focal_algorithm == 'quadrant' else 1
+        if type(focal_workers) is not int or focal_workers not in (1, 2, 4):
+            raise ValueError('Focal workers must be 1, 2 or 4')
+        if focal_algorithm != 'quadrant' and focal_workers != 1:
+            raise ValueError('Parallel focal Ialpha requires quadrant algorithm')
+        self.focal_cache_dir = focal_cache_dir
+        self.focal_workers = focal_workers
+        _start_dm_filter = time.perf_counter()
         self.Hfilter = 1
         if self.ao.aoMode=="SLAO":
             n_ph = 2*self.ao.dms.nActu1D[0] + 1
             modes = self.ao.dms.setInfluenceFunction(n_ph)
             #val_act = np.argwhere(modes.max(axis=0)==0)
             self.Hfilter = np.dot(modes, modes.T)
+        self.timing_breakdown_ms["dm_influence_filter"] = 1000*(
+            time.perf_counter()-_start_dm_filter
+        )
 
-        self.freq = frequencyDomain(self.ao, Hfilter=self.Hfilter)
+        _start_frequency = time.perf_counter()
+        _psfr_memory_checkpoint('frequencyDomain start')
+        self.freq = frequencyDomain(
+            self.ao, Hfilter=self.Hfilter,
+            focal_algorithm=self.focal_algorithm,
+            focal_cache_dir=self.focal_cache_dir,
+            focal_workers=self.focal_workers,
+        )
+        self.timing_breakdown_ms["frequency_domain"] = 1000*(time.perf_counter()-_start_frequency)
+        _psfr_memory_checkpoint("frequencyDomain done")
+        _start_fourier = time.perf_counter()
         self.fao = fourierModel(self.path_ini, calcPSF=False, display=False,
                                 freq=self.freq, ao=self.ao)
+        self.timing_breakdown_ms["fourier_model"] = 1000*(time.perf_counter()-_start_fourier)
 
         self.t_freq = 1000*(time.time() - tstart) - self.t_initAO
 
         # INSTANTIATING THE FITTING PHASE STRUCTURE FUNCTION FOR r0=1m
+        _start_fitting_sf = time.perf_counter()
         self.dphi_fit = self.fitting_phase_structure_function(1)
+        self.timing_breakdown_ms["fitting_sf"] = 1000*(time.perf_counter()-_start_fitting_sf)
         self.t_dfit = 1000*(time.time() - tstart) - self.t_freq
 
         # INSTANTIATING THE ALIASING PHASE STRUCTURE FUNCTION FOR r0=1m
+        _start_aliasing_sf = time.perf_counter()
         self.dphi_alias = self.aliasing_phase_structure_function(1)
+        self.timing_breakdown_ms["aliasing_sf"] = 1000*(time.perf_counter()-_start_aliasing_sf)
         self.t_dalias = 1000*(time.time() - tstart) - self.t_dfit
 
         # INSTANTIATING THE TT RESIDUAL PHASE STRUCTURE FUNCTION IN LGS MODE
+        _start_tt = time.perf_counter()
         if compute_dphi_jitter:
             self.dphi_tt = self.jitter_phase_structure_function()
         else:
             self.dphi_tt = 0*self.dphi_fit
+        self.timing_breakdown_ms["tiptilt_sf"] = 1000*(time.perf_counter()-_start_tt)
         self.t_dtt = 1000*(time.time() - tstart) - self.t_dalias
 
         # INSTANTIATING THE AO RESIDUAL PHASE STRUCTURE FUNCTION
+        _start_ho_sf = time.perf_counter()
+        _psfr_memory_checkpoint('HO Vii start')
         self.dphi_ao = self.residual_phase_structure_function()
+        _psfr_memory_checkpoint('HO Vii done')
+        self.timing_breakdown_ms["ho_sf"] = 1000*(time.perf_counter()-_start_ho_sf)
         self.t_dao = 1000*(time.time() - tstart) - self.t_dtt
 
         # INSTANTIATING THE ANISOPLANATISM PHASE STRUCTURE FUNCTION IF ANY
+        _start_aniso_transfer = time.perf_counter()
         if self.ao.lgs is None or self.ao.lgs.height==0:
             if self.freq.isAniso:
                 self.dphi_ani = self.freq.dani_ang
@@ -206,19 +261,31 @@ class psfR:
             self.dani_tt = self.freq.dani_tt
             self.dphi_ani = self.dani_focang + self.dani_tt
 
+        self.timing_breakdown_ms["anisoplanatism_transfer"] = 1000*(
+            time.perf_counter()-_start_aniso_transfer
+        )
         # COMPUTING THE DETECTOR PIXEL TRANSFER FUNCTION
+        _start_detector_otf = time.perf_counter()
         if self.trs.tel.name!='OOMAO':
             self.otfPixel = self.pixel_optical_transfer_function()
         else:
             self.otfPixel = 1.0
 
+        self.timing_breakdown_ms["detector_pixel_otf"] = 1000*(
+            time.perf_counter()-_start_detector_otf
+        )
         # COMPUTING THE ERROR BREAKDOWN:
+        _start_budget = time.perf_counter()
+        _psfr_memory_checkpoint('error budget start')
         self.get_error_breakdown()
+        _psfr_memory_checkpoint('error budget done')
+        self.timing_breakdown_ms["error_budget_including_forward"] = 1000*(time.perf_counter()-_start_budget)
 
          # DEFINING BOUNDS
         self.bounds = self.define_bounds()
 
         self.t_init = 1000*(time.time()  - tstart)
+        self.timing_breakdown_ms["psfr_init_total"] = float(self.t_init)
 
     def _repr__(self):
         return 'PSF-Reconstruction model'
@@ -283,32 +350,34 @@ class psfR:
         return dphi_alias
 
     def residual_phase_structure_function(self, method='dm-based', basis='Vii'):
+        """HO SF via pure statistics plus the existing modal Fourier kernel.
+
+        self.Cao remains the uncorrected actuator covariance [m**2] for
+        the legacy error budget, and PSD diagnostics remain unchanged.
         """
-        Computes the phase structure function of the tip-tilt-excluded
-        residual phase.
-        """
-        # computing the empirical covariance matrix of the AO-residual OPD in the DM actuators domain
-        if method == 'slopes-based':
-            du = self.trs.rec.res
-        elif method == 'dm-based':
-            du = np.diff(self.trs.dm.com,axis=0)/self.ao.rtc.holoop['gain']
+        if method == 'dm-based':
+            measurements = self.trs.dm.com
+            gain = self.ao.rtc.holoop['gain']
+        elif method == 'slopes-based':
+            measurements = self.trs.rec.res
+            gain = None
+        else:
+            raise ValueError("Unknown HO residual method: " + str(method))
 
-        self.Cao = np.dot(du.T,du)/du.shape[0]
-
-        # Unbiasing noise and accounting for the wave number
-        Cao = (2*np.pi/self.freq.wvlRef)**2 * (self.Cao - self.trs.wfs.Cn_ao)
-
-        # Computing the phase structure function
-        _, dphi_ao = psfrUtils.modes2Otf(
-            Cao, self.trs.mat.dmIF,
-            self.ao.tel.pupil,
-            self.freq.nOtf,
-            basis=basis,
-            samp=self.freq.sampRef,
+        stats = estimate_ho_statistics(
+            measurements, self.trs.wfs.Cn_ao,
+            reference_wavelength_m=self.freq.wvlRef,
+            method=method, loop_gain=gain,
+        )
+        self.Cao = stats.empirical_covariance_m2
+        _, dphi_ao = reconstruct_ho_otf(
+            stats, self.trs.mat.dmIF, self.ao.tel.pupil, self.freq.nOtf,
+            sampling=self.freq.sampRef, basis=basis,
             covariance_psd_policy=getattr(self, 'ho_covariance_policy', 'strict'),
             covariance_diagnostics=getattr(self, 'ho_covariance_diagnostics', None),
+            vii_method=getattr(self,'ho_vii_method','legacy'),
+            vii_diagnostics=getattr(self,'ho_vii_diagnostics',None),
         )
-
         return dphi_ao
 
     def jitter_phase_structure_function(self, Ctt=None):
@@ -587,11 +656,8 @@ class psfR:
         return otfPixel
 
     def phase_structure_function(self, r0, x0_dphi, Cn2=None):
-
-        # A multi-layer P3 forward vector starts with one turbulence
-        # strength per layer (w_l*r0**(-5/3)), followed by gho and gtt.
-        # Do not silently interpret missing gains as zero, nor fail with
-        # an opaque IndexError after an expensive multi-layer setup.
+        """Compatibility adapter for the pure phase-SF assembly."""
+        # Validate gains before touching the AO object: legacy error contract.
         if (x0_dphi is None or len(x0_dphi) != 2
                 or not np.all(np.isfinite(x0_dphi))):
             raise ValueError(
@@ -600,43 +666,23 @@ class psfR:
                 "layer or [w_i*r0**(-5/3) for each layer, gho, gtt] "
                 "for multiple atmospheric/reconstructed layers."
             )
-
-        # On-axis phase structure function
-        SF = x0_dphi[0]*self.dphi_ao\
-           + x0_dphi[1]*self.dphi_tt \
-           + r0**(-5/3) * (self.dphi_fit + self.dphi_alias)
-
-        # Anisoplanatism is present for an LGS even with one equivalent
-        # atmospheric layer. In that case the fitted parameter is r0, not Cn2.
-        # P3's anisoplanatic kernels are normalized by r0^(-5/3) at atm.wvl,
-        # so convert their phase variance to the science reference wavelength.
-        if self.freq.isAniso:
-            if Cn2 is None:
-                Cn2 = np.asarray(self.ao.atm.weights) * r0**(-5/3)
-            Cn2 = np.asarray(Cn2, dtype=float).reshape(-1)
-            if Cn2.size != self.ao.atm.nL:
-                raise ValueError("Anisoplanatism: Cn2 must have one value per layer")
-            Cn2_at_science_wvl = Cn2 * (
-                self.ao.atm.wvl / self.freq.wvlRef
-            )**2
-            dani_raw = np.einsum(
-                'slxy,l->xys', self.dphi_ani, Cn2_at_science_wvl
-            )
-            # The interpolation of a baseline-averaged focal-anisoplanatic
-            # map can leave Dphi(0)>0 (0.304/0.176 rad^2 for n0120 at
-            # 1/7 layers). The PSF normalization removes this scale, but
-            # the unnormalized OTF Strehl is otherwise biased.
-            centre = (dani_raw.shape[0]//2, dani_raw.shape[1]//2)
-            self.dani_raw_zero_lag_rad2 = np.asarray(
-                dani_raw[centre], dtype=float
-            ).copy()
-            self.dani_zero_lag_reference = 'central_otf_sample'
-            self.dani = _anisoplanatism_zero_lag(dani_raw)
-            SF = SF[:,:,np.newaxis] + self.dani
-        else:
-            SF = np.repeat(SF[:,:,np.newaxis],self.ao.src.nSrc,axis=2)
-
-        return SF
+        is_aniso = self.freq.isAniso
+        result = assemble_phase_structure_function(
+            r0_m=r0, gains=x0_dphi,
+            dphi_ao=self.dphi_ao, dphi_tt=self.dphi_tt,
+            dphi_fit=self.dphi_fit, dphi_alias=self.dphi_alias,
+            n_sources=self.ao.src.nSrc,
+            anisoplanatism_kernel=self.dphi_ani if is_aniso else None,
+            layer_strengths=Cn2 if is_aniso else None,
+            layer_weights=self.ao.atm.weights if is_aniso else None,
+            atmosphere_wavelength_m=self.ao.atm.wvl if is_aniso else None,
+            science_wavelength_m=self.freq.wvlRef if is_aniso else None,
+        )
+        if is_aniso:
+            self.dani = result.anisoplanatism_rad2
+            self.dani_raw_zero_lag_rad2 = result.raw_zero_lag_rad2.copy()
+            self.dani_zero_lag_reference = result.zero_lag_reference
+        return result.dphi_rad2
 
     def __call__(self, x0, nPix=None):
 
