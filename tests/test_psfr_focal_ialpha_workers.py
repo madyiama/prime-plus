@@ -50,8 +50,9 @@ def test_ialpha_parallel_exact_identity_with_mixed_broadcast(workers):
 @pytest.mark.parametrize("workers", [2, 4])
 @pytest.mark.parametrize("l0", [25., 40., np.inf])
 def test_complete_focal_sf_is_worker_independent(workers, l0):
-    serial, sd = evaluate(1, l0=l0, nact=5)
-    parallel, pd = evaluate(workers, l0=l0, nact=5)
+    # nact=8 ensures >= 4*4096 radial elements for four-way chunking.
+    serial, sd = evaluate(1, l0=l0, nact=8)
+    parallel, pd = evaluate(workers, l0=l0, nact=8)
     np.testing.assert_allclose(parallel, serial, rtol=1e-12, atol=1e-12)
     assert pd["ialpha_workers_requested"] == workers
     assert pd["quadrant_direct"] is True
