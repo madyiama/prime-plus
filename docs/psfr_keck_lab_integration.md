@@ -168,6 +168,8 @@ uv run --with pytest python -m pytest -q \
   tests/test_psfr_vii_real_fft.py
 ```
 
-After PR #50 CI and local Keck acceptance, merge into
-`refactor/psfr-core`, then connect `keck-psf-lab` by a **separate PR**
-in the observatory repository. No change to `main` is implied.
+PR #50 has been merged into `refactor/psfr-core` after GitHub CI
+(**863 passed, 97 skipped, 88 subtests**). Before connecting
+`keck-psf-lab`, rerun the real Keck n0120 and n0013 scientific acceptance
+on this consolidated commit, then integrate via a **separate PR** in the
+observatory repository. No change to `main` is implied.
