@@ -1,8 +1,10 @@
 """Compare actual Keck legacy vs algebraically factorized Vii HO kernels.
 
-No tolerance relaxation. Both HO phase SF and full spectral science PSF
-must match to atol=rtol=1e-12. Time results are meaningless if different
-input FITS/SAV, pupil orientation, or cache state is used.
+No tolerance relaxation. Report strict HO phase SF parity separately
+from full spectral science PSF parity at atol=rtol=1e-12.
+The accepted gate is the *final PSF* (user-approved), while a HO-SF
+mismatch is retained as an explicit numerical-diagnostic warning.
+Time results are meaningless for different FITS/SAV, pupil or cache.
 """
 from __future__ import annotations
 
@@ -65,6 +67,14 @@ def compare(legacy:Path,factorized:Path,*,rtol=1e-12,atol=1e-12):
     return {
         "kind":"real_Keck_Vii_factorization_vs_historical",
         "parity_passed":bool(ho["parity_passed"] and psf["parity_passed"]),
+        "science_psf_accepted":bool(psf["parity_passed"]),
+        "ho_sf_strict_parity_passed":bool(ho["parity_passed"]),
+        "numerical_diagnostic_warning":(
+            None if ho["parity_passed"] else
+            "Intermediate HO SF exceeds strict 1e-12 tolerance even "
+            "though science PSF is accepted; retain this warning and "
+            "verify optical/stellar metrics on further observations."
+        ),
         "rtol":rtol,"atol":atol,
         "ho_structure_function":ho,"science_psf":psf,
         "ho_vii_diagnostics":p1.get("ho_vii_kernel",{}),
@@ -90,8 +100,11 @@ def main():
     args.output.parent.mkdir(parents=True,exist_ok=True)
     args.output.write_text(json.dumps(result,indent=2,allow_nan=False),encoding="utf-8")
     print(json.dumps(result,indent=2,allow_nan=False))
-    if not result["parity_passed"]:
-        raise SystemExit("FAILED: strict Vii HO SF or Keck PSF parity (1e-12)")
+    if not result["science_psf_accepted"]:
+        raise SystemExit("FAILED: science PSF parity (rtol=atol=1e-12)")
+    if not result["ho_sf_strict_parity_passed"]:
+        print("WARNING: intermediate HO SF 1e-12 parity failed; "
+              "science PSF passed. This difference remains auditable.")
 
 
 if __name__=="__main__":
