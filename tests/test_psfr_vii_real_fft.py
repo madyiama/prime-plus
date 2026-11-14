@@ -9,6 +9,7 @@ from types import SimpleNamespace as NS
 import numpy as np
 import pytest
 
+from p3.aoSystem import FourierUtils
 from p3.psfr.hoFactorized import accumulate_vii_factorized_real
 from p3.psfr.psfrUtils import modes2Otf
 from p3.psfr.ho import HOStatistics, reconstruct_ho_otf
@@ -49,7 +50,10 @@ def test_real_fft_matches_full_complex_vii_for_even_odd_symmetric_and_rotated_pu
         np.testing.assert_allclose(real[1],full[1],rtol=1e-12,atol=1e-12)
         assert diag["fft_backend"]=="numpy"
         assert diag["method"]=="factorized_real"
-        assert diag["half_spectrum_shape"]==[2*n,n+1]
+        padded=FourierUtils.enlargeSupport(rotated,2)
+        assert diag["half_spectrum_shape"]==[
+            padded.shape[0],padded.shape[1]//2+1,
+        ]
         assert diag["mode_count"]==n_modes
         assert diag["workers"]==1
         assert diag["pupil_or_ho_otf_cached"] is False
