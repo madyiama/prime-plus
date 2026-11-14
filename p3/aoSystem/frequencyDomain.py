@@ -148,7 +148,7 @@ class frequencyDomain():
             self.kcExt = None
 
         self.Hfilter = Hfilter
-        if focal_algorithm not in ("legacy", "symmetry"):
+        if focal_algorithm not in ("legacy", "symmetry", "quadrant"):
             raise ValueError("Unknown focal algorithm: " + str(focal_algorithm))
         self.focal_algorithm = focal_algorithm
         self.focal_cache_dir = focal_cache_dir
