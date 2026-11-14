@@ -46,6 +46,9 @@ def test_real_comparator_accepts_both_independent_products_identically(tmp_path)
     _write(new,"factorized")
     result=compare(old,new)
     assert result["parity_passed"]
+    assert result["science_psf_accepted"]
+    assert result["ho_sf_strict_parity_passed"]
+    assert result["numerical_diagnostic_warning"] is None
     assert result["ho_structure_function"]["max_absolute_difference"]==0
     assert result["science_psf"]["max_absolute_difference"]==0
     assert result["ho_sf_speedup"]==pytest.approx(11.5/7.7)
@@ -59,6 +62,9 @@ def test_unchanged_psf_cannot_hide_failed_ho_phase_sf(tmp_path):
     assert result["science_psf"]["parity_passed"]
     assert not result["ho_structure_function"]["parity_passed"]
     assert not result["parity_passed"]
+    assert result["science_psf_accepted"]
+    assert not result["ho_sf_strict_parity_passed"]
+    assert result["numerical_diagnostic_warning"]
 
 
 def test_changed_pupil_geometry_is_not_a_valid_ab_comparison(tmp_path):
@@ -83,3 +89,13 @@ def test_incorrect_baseline_method_tag_is_rejected(tmp_path):
     _write(new,"factorized")
     with pytest.raises(ValueError,match="Expected"):
         compare(old,new)
+
+
+def test_changed_science_psf_still_blocks_acceptance(tmp_path):
+    old,new=tmp_path/"old",tmp_path/"new"
+    _write(old,"legacy")
+    _write(new,"factorized",psf_delta=.001)
+    report=compare(old,new)
+    assert not report["science_psf_accepted"]
+    assert report["ho_sf_strict_parity_passed"]
+    assert not report["parity_passed"]
