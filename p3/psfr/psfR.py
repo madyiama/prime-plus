@@ -156,7 +156,7 @@ class psfR:
 
 
         # INSTANTIATING THE SPATIAL FREQUENCY AND THE FOURIER MODEL
-        if focal_algorithm not in ("legacy", "symmetry"):
+        if focal_algorithm not in ("legacy", "symmetry", "quadrant"):
             raise ValueError("Unknown focal covariance algorithm")
         self.focal_algorithm = focal_algorithm
         self.focal_cache_dir = focal_cache_dir
