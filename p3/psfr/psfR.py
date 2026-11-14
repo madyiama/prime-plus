@@ -56,6 +56,30 @@ def _sqrt_checked_variance(variance, label):
     return np.sqrt(variance)
 
 
+
+def _psfr_memory_checkpoint(stage):
+    """Log current Linux RSS before an external kill, without altering PSF arrays.
+
+    Do not interpret SIGKILL or RSS alone as proof of OOM: inspect Linux
+    cgroup memory.events and container limits in Keck PSF Lab.
+    """
+    if not sys.platform.startswith("linux"):
+        return
+    rss_mb = None
+    try:
+        with open("/proc/self/status", encoding="ascii") as status:
+            for line in status:
+                if line.startswith("VmRSS:"):
+                    rss_mb = float(line.split()[1]) / 1024.0
+                    break
+    except (OSError, ValueError, IndexError):
+        pass
+    if rss_mb is not None:
+        print(f"[psfR memory] {stage}: RSS={rss_mb:.1f} MiB", flush=True)
+    else:
+        print(f"[psfR memory] {stage}: RSS unavailable", flush=True)
+
+
 def _integrate_spectral_psf(psf):
     """Combine spectral slices into the 2-D broadband image for a Strehl check."""
     if psf.ndim == 2:
@@ -133,7 +157,9 @@ class psfR:
             raise ValueError("Unknown HO Vii method")
         self.ho_vii_method = ho_vii_method
         self.ho_vii_diagnostics = {}
+        _psfr_memory_checkpoint('aoSystem start')
         self.ao = aoSystem(self.path_ini, path_root=path_root)
+        _psfr_memory_checkpoint('aoSystem done')
 
         # defining the number of model parameters
         self.tag = 'PSF-R'
@@ -179,6 +205,7 @@ class psfR:
         )
 
         _start_frequency = time.perf_counter()
+        _psfr_memory_checkpoint('frequencyDomain start')
         self.freq = frequencyDomain(
             self.ao, Hfilter=self.Hfilter,
             focal_algorithm=self.focal_algorithm,
@@ -186,6 +213,7 @@ class psfR:
             focal_workers=self.focal_workers,
         )
         self.timing_breakdown_ms["frequency_domain"] = 1000*(time.perf_counter()-_start_frequency)
+        _psfr_memory_checkpoint("frequencyDomain done")
         _start_fourier = time.perf_counter()
         self.fao = fourierModel(self.path_ini, calcPSF=False, display=False,
                                 freq=self.freq, ao=self.ao)
@@ -216,7 +244,9 @@ class psfR:
 
         # INSTANTIATING THE AO RESIDUAL PHASE STRUCTURE FUNCTION
         _start_ho_sf = time.perf_counter()
+        _psfr_memory_checkpoint('HO Vii start')
         self.dphi_ao = self.residual_phase_structure_function()
+        _psfr_memory_checkpoint('HO Vii done')
         self.timing_breakdown_ms["ho_sf"] = 1000*(time.perf_counter()-_start_ho_sf)
         self.t_dao = 1000*(time.time() - tstart) - self.t_dtt
 
@@ -246,7 +276,9 @@ class psfR:
         )
         # COMPUTING THE ERROR BREAKDOWN:
         _start_budget = time.perf_counter()
+        _psfr_memory_checkpoint('error budget start')
         self.get_error_breakdown()
+        _psfr_memory_checkpoint('error budget done')
         self.timing_breakdown_ms["error_budget_including_forward"] = 1000*(time.perf_counter()-_start_budget)
 
          # DEFINING BOUNDS
