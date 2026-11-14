@@ -671,6 +671,11 @@ def main():
             "261 corresponds to 13 samples per actuator pitch."
         ),
     )
+    parser.add_argument(
+        "--profile-psfr", action="store_true",
+        help="Opt-in cProfile around PSF-R initialization; writes .pstats and "
+             "top cumulative functions without changing the AO/PSF physics.",
+    )
     args = parser.parse_args()
     if args.p3_pupil_parity != "native" and args.p3_pupil_resampling != "physical_binary":
         parser.error("--p3-pupil-parity flip_x/flip_y requires physical_binary")
@@ -1065,7 +1070,8 @@ def main():
     if args.disable_tt_jitter:
         print("[TT jitter OTF] DISABLED for ablation (not a physical model)",
               flush=True)
-    model = stage("psfR", lambda: psfR(
+    def _construct_psfr():
+        return psfR(
         sd.trs, compute_dphi_jitter=not args.disable_tt_jitter,
         tt_covariance_mode=tt_jitter_model,
         tt_mirror_model=tt_mirror_model,
@@ -1074,7 +1080,47 @@ def main():
         tt_kernel_convention=args.tt_kernel_convention,
         tt_axis_angle_deg=args.tt_axis_angle_deg,
         tt_axis_parity=args.tt_axis_parity,
-    ))
+        )
+
+    if args.profile_psfr:
+        import cProfile
+        import pstats
+        profiler = cProfile.Profile()
+        try:
+            model = stage("psfR", lambda: profiler.runcall(_construct_psfr))
+        finally:
+            profiler.dump_stats(str(args.output / "psfr_init.pstats"))
+            with (args.output / "psfr_init_profile_top.txt").open(
+                "w", encoding="utf-8"
+            ) as stream:
+                pstats.Stats(profiler, stream=stream).strip_dirs().sort_stats(
+                    "cumulative"
+                ).print_stats(45)
+            print(
+                "[PSF-R profiler] saved psfr_init.pstats and "
+                "psfr_init_profile_top.txt", flush=True,
+            )
+    else:
+        model = stage("psfR", _construct_psfr)
+
+    from p3.psfr.timing import psfr_timing_report
+    timing_report = psfr_timing_report(model)
+    (args.output / "psfr_timing_breakdown.json").write_text(
+        json.dumps(timing_report, indent=2, allow_nan=False),
+        encoding="utf-8",
+    )
+    for row in timing_report["largest_disjoint_stages"]:
+        print(
+            "[PSF-R timing]",
+            row["stage"], f"{row['elapsed_ms']/1000:.3f} s", flush=True,
+        )
+    anis_ms = timing_report["frequency_nested_ms"].get("anisoplanatism")
+    if anis_ms is not None:
+        print(
+            "[PSF-R timing nested] frequency anisoplanatism",
+            f"{anis_ms/1000:.3f} s (subset of frequency_domain)",
+            flush=True,
+        )
 
     # Telescope applies PupilResampling to the archived pupil at OTF build
     # time. Record its *effective* transmission, not just the input CLI flag.

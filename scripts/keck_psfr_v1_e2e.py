@@ -163,6 +163,8 @@ def main():
     ap.add_argument("--config",type=Path,default=DEFAULT_CONFIG)
     ap.add_argument("--output",type=Path,
                     default=Path("results/psfr_v1_acceptance"))
+    ap.add_argument("--profile-psfr", action="store_true",
+                    help="Profile child PSF-R init (cProfile output per FITS case)")
     ap.add_argument("--check-only",action="store_true",
                     help="Check existing case outputs; do not run P3")
     args=ap.parse_args()
@@ -204,6 +206,8 @@ def main():
                 "--tt-axis-parity","native",
                 "--ho-covariance-policy","strict",
             ]
+            if args.profile_psfr:
+                cmd.append("--profile-psfr")
             entry["command"]=cmd
             print("[PSFR V1] Reconstructing",fits.name,flush=True)
             with (destination/"psfr_v1_run.log").open("w",encoding="utf-8") as log:
