@@ -75,7 +75,8 @@ class psfR:
                  ho_covariance_policy='strict',
                  tt_kernel_convention='noll_angular',
                  tt_axis_angle_deg=None, tt_axis_parity='native',
-                 focal_algorithm='legacy', focal_cache_dir=None):
+                 focal_algorithm='legacy', focal_cache_dir=None,
+                 ho_vii_method='legacy'):
         """
         Instantiating the psf-reconstruction model from a telemetry object
         """
@@ -128,6 +129,10 @@ class psfR:
             )
         self.ho_covariance_policy = ho_covariance_policy
         self.ho_covariance_diagnostics = {}
+        if ho_vii_method not in ('legacy','factorized'):
+            raise ValueError("Unknown HO Vii method")
+        self.ho_vii_method = ho_vii_method
+        self.ho_vii_diagnostics = {}
         self.ao = aoSystem(self.path_ini, path_root=path_root)
 
         # defining the number of model parameters
@@ -330,6 +335,8 @@ class psfR:
             sampling=self.freq.sampRef, basis=basis,
             covariance_psd_policy=getattr(self, 'ho_covariance_policy', 'strict'),
             covariance_diagnostics=getattr(self, 'ho_covariance_diagnostics', None),
+            vii_method=getattr(self,'ho_vii_method','legacy'),
+            vii_diagnostics=getattr(self,'ho_vii_diagnostics',None),
         )
         return dphi_ao
 
