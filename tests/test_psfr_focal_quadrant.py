@@ -47,7 +47,7 @@ def test_flicker_quadrant_matches_exact_full_symmetry(l0, grid, output):
     np.testing.assert_allclose(fast, reference, rtol=1e-12, atol=2e-11)
     assert diag["quadrant_direct"] is True
     assert diag["full_covariance_matrix_allocated"] is False
-    assert diag["n_computed_layers"] == 2
+    assert diag["n_computed_layers"] == src.nSrc * np.count_nonzero(atm.heights)
     assert diag["grouping_ms"] == 0
 
 
