@@ -1,12 +1,15 @@
 # PSF-R: performance implementation guide and closure (2026-11-14)
 
-**Scope:** experimental branch `perf/psfr-focal-cache-profiling` / draft PR
-[#42](https://github.com/madyiama/prime-plus/pull/42).
-The optimized paths are **opt-in**. The production reference remains the
-historical `legacy` calculation, including strict HO covariance PSD
-validation. **Do not promote any of these methods to default or merge #42
-directly into `refactor/psfr-core`**: #42's base is the unvalidated fitting
-branch `feat/psfr-ao-parameter-fit` / #39.
+**Scope:** consolidated optimized PSF-R integration PR #50, targeted at
+refactor/psfr-core for Keck PSF Lab. The original experiments PR #39/#42
+remain available for traceability; their content is ported on top of
+the up-to-date refactor rather than merging the divergent branches.
+
+**Optimized defaults in PSF-R and Keck E2E:** HO Vii factorized_real,
+Flicker direct quadrant, effective 4 CPU workers; legacy/symmetry and
+one worker are still explicitly selectable. Disk focal cache remains off;
+HO PSD strict, pupil/TT physics and fitting opt-in are unchanged.
+See [Keck PSF Lab integration](psfr_keck_lab_integration.md).
 
 This guide is an architectural index for the implementation. Detailed
 math and local protocols remain in the per-method documents:
@@ -24,7 +27,7 @@ math and local protocols remain in the per-method documents:
 | Dense Flicker covariance repeats Bessel work on identical separations | `p3/aoSystem/focalFast.py:symmetric_focal_layer` evaluates unique I1/I2 lag grids and I4/I5 point grids; I6 follows I3 transposition | The six terms and finite-L0 McDonald `FourierUtils.Ialpha` stay unchanged |
 | Full pair matrix computed even though only one quadrant is averaged | `direct_focal_quadrant_map` enumerates exactly the historical negative-lag pupil-pair subset and aggregates with `np.bincount` | The historical opposite signed X/Y flattening is intentional; the other quadrants use the existing reflection |
 | Full focal matrix invalid to bypass when a spatial filter is requested | `anisoplanatismModel.focal_angular_function` falls back to the full symmetry-plus-filter path when `h_filt` is not scalar | Never discard `Hfilter` or cache its output as geometry-only |
-| Expensive independent Bessel evaluations on CPU | `focalFast.parallel_ialpha`: fixed row blocks, same SciPy `Ialpha`, float64, managed `ThreadPoolExecutor`, ordered assembly | No spline/table/interpolation; 1 worker remains default; only `quadrant` may use 2 or 4 |
+| Expensive independent Bessel evaluations on CPU | `focalFast.parallel_ialpha`: fixed row blocks, same SciPy `Ialpha`, float64, managed `ThreadPoolExecutor`, ordered assembly | No spline/table/interpolation; the direct helper has 1-worker default, while consolidated PSF-R selects 4 with quadrant; only `quadrant` may use 2 or 4 |
 | Repeated geometric focal SF across identical observation geometry | `p3/aoSystem/focalCache.py` SHA-256 key and validated atomic `.npz` | Only unweighted, unfiltered **focal geometry**; never optical pupil/OTF, TT, HO, NCPA or finished science PSF |
 | Vii kernel computes per-mode squared-mode FFT redundantly | `p3/psfr/hoFactorized.py:accumulate_vii_factorized`: factor `FFT(sum λM²)` | Algebraically same covariance; floating-point summation order changes |
 | Full complex FFTs duplicate the Hermitian half spectrum | `accumulate_vii_factorized_real` with `np.fft.rfft2/irfft2` | Same double-precision physical kernel; numerical parity must be evaluated rather than assumed |
@@ -123,14 +126,12 @@ inside the former. `psfr_init_total` is part of the shell `time` total.
 
 ## End-of-performance-work decision
 
-- Freeze the experimental numerical optimizations as opt-in;
-  do not chase GPU or further threading solely for a faster
-  constructor.
-- Keep #42 a **draft** because its base #39 carries fitting features
-  that must not be imported into the refactor core implicitly.
-- When ready to integrate validated performance improvements, open a
-  new **isolated** PR targeting `refactor/psfr-core` with only the
-  HO/focal code, tests, docs and Keck acceptance evidence—no fitting.
-- Prioritize multi-acquisition scientific reliability: HO covariance
-  PSD, STRAP calibration, correct NIRC2 pupil/PSF morphology and
-  chromatic physics, before the fitting stage.
+- The optimization algorithms are integrated into the PSF-R refactor
+  through PR #50, with optimized numerical defaults and explicit legacy
+  reference selection. Scientific telescope calibration is still separate.
+- PR #41 on memory streaming remains under review: unverified memory
+  changes cannot replace the optimized Vii kernel without numerical and
+  Docker RSS checks.
+- Prioritize Keck multi-acquisition HO PSD/STRAP, pupillary geometry,
+  chromatic physics and fitting residuals over additional GPU/CPU
+  micro-optimizations.
