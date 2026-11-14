@@ -10,6 +10,8 @@ diameter, DM sampling, pupil-axis convention, angular field, beacon
 height and directions, atmospheric altitudes and L0.
 Validated schema and checksum reject corrupt/stale entries.
 Writes are atomic; no pickle, mutable globals or network requests.
+See docs/psfr_perf_implementation_guide.md for cache boundaries, provenance
+and the Keck science-validation requirements before any default promotion.
 """
 from __future__ import annotations
 
