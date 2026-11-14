@@ -129,7 +129,7 @@ class psfR:
             )
         self.ho_covariance_policy = ho_covariance_policy
         self.ho_covariance_diagnostics = {}
-        if ho_vii_method not in ('legacy','factorized'):
+        if ho_vii_method not in ('legacy','factorized','factorized_real'):
             raise ValueError("Unknown HO Vii method")
         self.ho_vii_method = ho_vii_method
         self.ho_vii_diagnostics = {}
