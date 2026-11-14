@@ -143,6 +143,7 @@ class psfR:
         if self.ao.tel.path_static_on and hasattr(trs.tel,'map_ncpa')and np.any(trs.tel.map_ncpa):
             self.ao.tel.opdMap_on = trs.tel.map_ncpa
         self.t_initAO = 1000*(time.time() - tstart)
+        self.timing_breakdown_ms = {"ao_system": float(self.t_initAO)}
 
 
         # INSTANTIATING THE SPATIAL FREQUENCY AND THE FOURIER MODEL
@@ -153,30 +154,47 @@ class psfR:
             #val_act = np.argwhere(modes.max(axis=0)==0)
             self.Hfilter = np.dot(modes, modes.T)
 
+        _start_frequency = time.perf_counter()
         self.freq = frequencyDomain(self.ao, Hfilter=self.Hfilter)
+        self.timing_breakdown_ms["frequency_domain"] = 1000*(time.perf_counter() - _start_frequency)
+        # In Keck SLAO this includes focal-angular anisoplanatism; freq.tani
+        # is the already recorded nested anisoplanatism wall time.
+        self.timing_breakdown_ms["frequency_anisoplanatism_nested"] = float(
+            getattr(self.freq, 'tani', 0.0)
+        )
+        _start_fourier = time.perf_counter()
         self.fao = fourierModel(self.path_ini, calcPSF=False, display=False,
                                 freq=self.freq, ao=self.ao)
+        self.timing_breakdown_ms["fourier_model"] = 1000*(time.perf_counter() - _start_fourier)
 
         self.t_freq = 1000*(time.time() - tstart) - self.t_initAO
 
         # INSTANTIATING THE FITTING PHASE STRUCTURE FUNCTION FOR r0=1m
+        _start_fit = time.perf_counter()
         self.dphi_fit = self.fitting_phase_structure_function(1)
         self.t_dfit = 1000*(time.time() - tstart) - self.t_freq
+        self.timing_breakdown_ms["fitting_sf"] = 1000*(time.perf_counter() - _start_fit)
 
         # INSTANTIATING THE ALIASING PHASE STRUCTURE FUNCTION FOR r0=1m
+        _start_alias = time.perf_counter()
         self.dphi_alias = self.aliasing_phase_structure_function(1)
         self.t_dalias = 1000*(time.time() - tstart) - self.t_dfit
+        self.timing_breakdown_ms["aliasing_sf"] = 1000*(time.perf_counter() - _start_alias)
 
         # INSTANTIATING THE TT RESIDUAL PHASE STRUCTURE FUNCTION IN LGS MODE
+        _start_tt = time.perf_counter()
         if compute_dphi_jitter:
             self.dphi_tt = self.jitter_phase_structure_function()
         else:
             self.dphi_tt = 0*self.dphi_fit
         self.t_dtt = 1000*(time.time() - tstart) - self.t_dalias
+        self.timing_breakdown_ms["tiptilt_sf"] = 1000*(time.perf_counter() - _start_tt)
 
         # INSTANTIATING THE AO RESIDUAL PHASE STRUCTURE FUNCTION
+        _start_ho = time.perf_counter()
         self.dphi_ao = self.residual_phase_structure_function()
         self.t_dao = 1000*(time.time() - tstart) - self.t_dtt
+        self.timing_breakdown_ms["ho_sf"] = 1000*(time.perf_counter() - _start_ho)
 
         # INSTANTIATING THE ANISOPLANATISM PHASE STRUCTURE FUNCTION IF ANY
         if self.ao.lgs is None or self.ao.lgs.height==0:
@@ -195,12 +213,17 @@ class psfR:
             self.otfPixel = 1.0
 
         # COMPUTING THE ERROR BREAKDOWN:
+        _start_error_budget = time.perf_counter()
         self.get_error_breakdown()
+        self.timing_breakdown_ms["error_budget_including_forward"] = 1000*(
+            time.perf_counter() - _start_error_budget
+        )
 
          # DEFINING BOUNDS
         self.bounds = self.define_bounds()
 
         self.t_init = 1000*(time.time()  - tstart)
+        self.timing_breakdown_ms["psfr_init_total"] = float(self.t_init)
 
     def _repr__(self):
         return 'PSF-Reconstruction model'
